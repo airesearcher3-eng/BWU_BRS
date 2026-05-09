@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en-US">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BRS Automation — Brainware University</title>
+    <meta name="description" content="Bank Reconciliation Statement Automation System for Brainware University">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap">
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+
+<body>
+
+    <!-- ── Login Page ─────────────────────────────────────────────── -->
+    <div id="loginPage" class="login-page">
+        <div class="login-card">
+            <div class="login-logo">
+                <img src="/static/images/bwu_logo.png" alt="Brainware University" class="login-logo-img">
+                <h1 class="login-title">BRS Automation</h1>
+                <p class="login-subtitle">Brainware University — Accounts Department</p>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Username</label>
+                <input type="text" class="form-control" id="loginUsername" placeholder="Enter username"
+                    autocomplete="username">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Password</label>
+                <input type="password" class="form-control" id="loginPassword" placeholder="Enter password"
+                    autocomplete="current-password">
+            </div>
+            <div id="loginError" class="alert alert-danger" style="display:none"></div>
+            <button class="btn btn-primary" style="width:100%;justify-content:center;padding:0.75rem" id="loginBtn"
+                onclick="doLogin()">
+                <span class="material-symbols-rounded btn-icon">lock</span> Sign In
+            </button>
+            <!-- <p class="login-hint">Default: admin / admin123</p> -->
+        </div>
+    </div>
+
+    <!-- ── App Shell (hidden until login) ────────────────────────── -->
+    <div id="appShell" style="display:none">
+
+        <!-- ── Header ───────────────────────────────────────────────── -->
+        <header class="header">
+            <div class="header-content">
+                <div class="logo-section">
+                    <img src="/static/images/bwu_logo.png" alt="BWU" class="header-logo-img">
+                    <div>
+                        <div class="logo-text">BRS Automation</div>
+                        <div class="logo-sub">Brainware University</div>
+                    </div>
+                </div>
+                <div class="user-info">
+                    <a href="/admin" id="adminPortalLink" class="btn btn-secondary btn-sm" style="display:none"
+                        title="User Management Portal"><span class="material-symbols-rounded btn-icon">admin_panel_settings</span> Admin</a>
+                    <span class="user-name" id="headerUserName">User</span>
+                    <div class="user-avatar" id="headerUserAvatar">U</div>
+                    <button class="btn btn-secondary btn-sm" onclick="doLogout()" title="Sign Out"><span class="material-symbols-rounded btn-icon">logout</span> Logout</button>
+                </div>
+            </div>
+        </header>
+
+        <!-- ── Main Container ───────────────────────────────────────── -->
+        <div class="container">
+
+            <!-- Navigation Tabs -->
+            <div class="nav-tabs" id="mainNav">
+                <div class="nav-tab active" data-tab="dashboard"><span class="material-symbols-rounded nav-icon">dashboard</span> Dashboard</div>
+                <div class="nav-tab" data-tab="reconciliation"><span class="material-symbols-rounded nav-icon">bolt</span> Reconciliation</div>
+                <div class="nav-tab" data-tab="exceptions"><span class="material-symbols-rounded nav-icon">warning</span> Exceptions</div>
+                <div class="nav-tab" data-tab="reports"><span class="material-symbols-rounded nav-icon">description</span> Reports</div>
+                <div class="nav-tab" data-tab="audit" id="auditTab" style="display:none"><span class="material-symbols-rounded nav-icon">manage_search</span> Audit Trail</div>
+                <div class="nav-tab" data-tab="approvals" id="approvalsTab" style="display:none"><span class="material-symbols-rounded nav-icon">task_alt</span> Approvals</div>
+                <div class="nav-tab" data-tab="settings"><span class="material-symbols-rounded nav-icon">settings</span> Settings</div>
+            </div>
+
+            <!-- ─── Dashboard Tab ─────────────────────────────────── -->
+            <div id="dashboard" class="tab-content active">
+                <div class="stats-grid" id="dashboardStats">
+                    <div class="stat-card success">
+                        <div class="stat-label">Auto-Match Rate</div>
+                        <div class="stat-value" id="statMatchRate">—</div>
+                        <div class="stat-change positive" id="statMatchChange"></div>
+                    </div>
+                    <div class="stat-card warning">
+                        <div class="stat-label">Open Exceptions</div>
+                        <div class="stat-value" id="statExceptions">—</div>
+                        <div class="stat-change" id="statExcChange"></div>
+                    </div>
+                    <div class="stat-card primary">
+                        <div class="stat-label">Total Runs</div>
+                        <div class="stat-value" id="statRuns">—</div>
+                        <div class="stat-change" id="statRunsChange"></div>
+                    </div>
+                    <div class="stat-card danger">
+                        <div class="stat-label">Unmatched Items</div>
+                        <div class="stat-value" id="statUnmatched">—</div>
+                        <div class="stat-change" id="statUnmatchedChange"></div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        Recent Reconciliation Runs
+                        <button class="btn btn-primary btn-sm" onclick="switchTab('reconciliation')"><span class="material-symbols-rounded btn-icon">add</span> New Run</button>
+                    </div>
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Run Date</th>
+                                    <th>Period</th>
+                                    <th>Bank Stmt</th>
+                                    <th>Bank Book</th>
+                                    <th>Matched</th>
+                                    <th>Unmatched</th>
+                                    <th>Status</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="runsTableBody">
+                                <tr>
+                                    <td colspan="8">
+                                        <div class="empty-state">
+                                            <div class="empty-state-icon">📋</div>
+                                            <div class="empty-state-text">No reconciliation runs yet</div>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ─── Reconciliation Tab ────────────────────────────── -->
+            <div id="reconciliation" class="tab-content">
+                <div class="card">
+                    <div class="card-header">Start New Reconciliation</div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label">Period Start</label>
+                            <input type="date" class="form-control" id="periodStart">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Period End</label>
+                            <input type="date" class="form-control" id="periodEnd">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Bank Account</label>
+                            <select class="form-control" id="bankAccountSelect">
+                                <option value="">— Select Bank Account —</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Bank Statement (Excel)</label>
+                        <div class="upload-area" id="bsUploadArea">
+                            <div class="upload-icon"><span class="material-symbols-rounded">description</span></div>
+                            <div class="upload-title">Drop bank statement here or click to browse</div>
+                            <div class="upload-desc">Detailed Statement .xlsx format</div>
+                            <input type="file" id="bsFileInput" style="display:none" accept=".xlsx,.xls">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Bank Book Ledger (ERP Export)</label>
+                        <div class="upload-area" id="bbUploadArea">
+                            <div class="upload-icon"><span class="material-symbols-rounded">table_chart</span></div>
+                            <div class="upload-title">Drop bank book export here or click to browse</div>
+                            <div class="upload-desc">ERP ledger export .xlsx format</div>
+                            <input type="file" id="bbFileInput" style="display:none" accept=".xlsx,.xls">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Previous Month BRS (Optional)</label>
+                        <div class="upload-area" id="prevBrsUploadArea">
+                            <div class="upload-icon"><span class="material-symbols-rounded">folder_open</span></div>
+                            <div class="upload-title">Drop previous BRS workbook here or click to browse</div>
+                            <div class="upload-desc">For carry-forward items. Optional if no prior BRS.</div>
+                            <input type="file" id="prevBrsFileInput" style="display:none" accept=".xlsx,.xls">
+                        </div>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:1rem;margin-bottom:0.5rem;flex-wrap:wrap">
+                        <button class="btn btn-primary" id="startReconciliationBtn" onclick="startReconciliation()">
+                            <span class="material-symbols-rounded btn-icon">bolt</span> Start Reconciliation
+                        </button>
+                        <!-- <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;font-size:0.9rem;color:var(--text-secondary)">
+                            <input type="checkbox" id="ragModeToggle" style="accent-color:var(--primary);width:16px;height:16px">
+                            <span class="material-symbols-rounded" style="font-size:18px;color:var(--primary)">smart_toy</span>
+                            RAG Mode (AI Matching)
+                        </label> -->
+                    </div>
+                </div>
+                <div class="card" id="progressCard" style="display:none">
+                    <div class="card-header">Reconciliation In Progress</div>
+                    <div id="progressMessage" style="color:var(--text-secondary);margin-bottom:0.5rem">Parsing files...
+                    </div>
+                    <div class="progress-bar-container">
+                        <div class="progress-fill" id="progressFill" style="width:0%"></div>
+                    </div>
+                    <div style="text-align:right;font-size:0.8rem;color:var(--text-tertiary)"><span
+                            id="progressPercent">0%</span> Complete</div>
+                </div>
+                <div class="card" id="resultsCard" style="display:none">
+                    <div class="card-header">Reconciliation Results <span class="badge badge-success"
+                            id="resultsBadge">✓ Completed</span></div>
+                    <div class="alert alert-success" id="successAlert" style="display:none">✅ Reconciliation completed
+                        successfully!</div>
+                    <div class="summary-grid" id="resultsSummary"></div>
+                    <div class="card-header" style="margin-top:1rem">Match Breakdown by Pass</div>
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Pass</th>
+                                    <th>Description</th>
+                                    <th>Matches</th>
+                                </tr>
+                            </thead>
+                            <tbody id="passBreakdown"></tbody>
+                        </table>
+                    </div>
+                    <div id="brsSummarySection" style="display:none;margin-top:1.5rem">
+                        <div class="card-header">BRS Statement Summary</div>
+                        <div class="table-container">
+                            <table>
+                                <tbody id="brsSummaryBody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div style="margin-top:1.5rem;display:flex;gap:0.75rem;flex-wrap:wrap">
+                        <button class="btn btn-primary" onclick="submitForApproval()"><span class="material-symbols-rounded btn-icon">send</span> Submit for Approval</button>
+                        <button class="btn btn-secondary" id="downloadBrsBtn"><span class="material-symbols-rounded btn-icon">download</span> Download BRS Excel</button>
+                        <button class="btn btn-secondary" id="viewMatchedReportBtn"
+                            onclick="openMatchedReport()"><span class="material-symbols-rounded btn-icon">fact_check</span> Matched Report</button>
+                        <button class="btn btn-secondary" onclick="viewExceptions()"><span class="material-symbols-rounded btn-icon">warning</span> View Exceptions</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ─── Exceptions Tab ────────────────────────────────── -->
+            <div id="exceptions" class="tab-content">
+                <div class="card">
+                    <div class="card-header">
+                        Exception Queue
+                        <span class="badge badge-warning" id="excCountBadge">0 Pending</span>
+                    </div>
+                    <div class="filter-section">
+                        <div class="search-box">
+                            <input type="text" class="form-control" placeholder="Search exceptions..." id="excSearch"
+                                oninput="filterExceptions()">
+                        </div>
+                        <select class="form-control" style="width:180px" id="excStatusFilter"
+                            onchange="filterExceptions()">
+                            <option value="">All Statuses</option>
+                            <option value="open">Open</option>
+                            <option value="in_progress">In Progress</option>
+                            <option value="escalated">Escalated</option>
+                            <option value="resolved">Resolved</option>
+                        </select>
+                        <select class="form-control" style="width:180px" id="excRunFilter"
+                            onchange="loadExceptions(this.value)">
+                            <option value="">Latest Run</option>
+                        </select>
+                        <select class="form-control" style="width:180px" id="excTypeFilter"
+                            onchange="filterExceptions()">
+                            <option value="">All Types</option>
+                            <option value="unknown_dr">Unknown Debit</option>
+                            <option value="unknown_cr">Unknown Credit</option>
+                            <option value="gib_unmatched">GIB/Tax Unmatched</option>
+                            <option value="amount_mismatch">Amount Mismatch</option>
+                            <option value="timing_difference">Timing Difference</option>
+                            <option value="stale_carry_forward">Stale Carry Forward</option>
+                        </select>
+                    </div>
+                    <div id="exceptionsList">
+                        <div class="empty-state">
+                            <div class="empty-state-icon">✅</div>
+                            <div class="empty-state-text">No exceptions found</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ─── Reports Tab ───────────────────────────────────── -->
+            <div id="reports" class="tab-content">
+                <div class="card">
+                    <div class="card-header">BRS Reports &amp; Downloads</div>
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Run ID</th>
+                                    <th>Period</th>
+                                    <th>Match Rate</th>
+                                    <th>Status</th>
+                                    <th>Generated</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="reportsTableBody">
+                                <tr>
+                                    <td colspan="6">
+                                        <div class="empty-state">
+                                            <div class="empty-state-icon">📁</div>
+                                            <div class="empty-state-text">No reports generated yet</div>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-header">Approval Status</div>
+                    <div id="approvalStatusContainer">
+                        <div class="empty-state">
+                            <div class="empty-state-icon">📋</div>
+                            <div class="empty-state-text">Select a run to view approval status</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        Matched Report
+                        <div style="display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap">
+                            <span class="badge badge-info" id="matchedReportBadge">No run selected</span>
+                            <button class="btn btn-primary btn-sm" id="downloadMatchedExcelBtn" onclick="downloadMatchedExcel()"
+                                disabled>📥 Download Excel</button>
+                            <button class="btn btn-secondary btn-sm" id="printMatchedBtn" onclick="printMatchedReport()"
+                                disabled>Print Matched Report</button>
+                        </div>
+                    </div>
+                    <div class="summary-grid" id="matchedReportSummary">
+                        <div class="summary-item">
+                            <div class="summary-label">Matched Groups</div>
+                            <div class="summary-value">0</div>
+                        </div>
+                        <div class="summary-item">
+                            <div class="summary-label">Statement Entries</div>
+                            <div class="summary-value">0</div>
+                        </div>
+                        <div class="summary-item">
+                            <div class="summary-label">Ledger Entries</div>
+                            <div class="summary-value">0</div>
+                        </div>
+                        <div class="summary-item">
+                            <div class="summary-label">Matched Amount</div>
+                            <div class="summary-value">0.00</div>
+                        </div>
+                    </div>
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Pass</th>
+                                    <th>Match Type</th>
+                                    <th>Statement Entries</th>
+                                    <th>Bank Book Entries</th>
+                                    <th>Amount</th>
+                                    <th>Notes</th>
+                                </tr>
+                            </thead>
+                            <tbody id="matchedReportBody">
+                                <tr>
+                                    <td colspan="6">
+                                        <div class="empty-state">
+                                            <div class="empty-state-icon">📄</div>
+                                            <div class="empty-state-text">Select a completed run to view the matched
+                                                report</div>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ─── Audit Trail Tab ───────────────────────────────── -->
+            <div id="audit" class="tab-content">
+                <div class="card">
+                    <div class="card-header">
+                        Audit Trail
+                        <button class="btn btn-secondary btn-sm" onclick="loadAuditLog()"><span class="material-symbols-rounded btn-icon">refresh</span> Refresh</button>
+                    </div>
+                    <div id="auditLogContainer">
+                        <div class="empty-state">
+                            <div class="empty-state-icon">📝</div>
+                            <div class="empty-state-text">No audit entries yet</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ─── Approvals & Escalated Exceptions Tab ──────────── -->
+            <div id="approvals" class="tab-content">
+                <!-- Pending Approvals -->
+                <div class="card">
+                    <div class="card-header">
+                        <span class="material-symbols-rounded btn-icon">approval</span> Pending Approvals
+                        <button class="btn btn-secondary btn-sm" onclick="loadApprovals()"><span class="material-symbols-rounded btn-icon">refresh</span> Refresh</button>
+                    </div>
+                    <div id="pendingApprovalsList">
+                        <div class="empty-state">
+                            <div class="empty-state-icon"><span class="material-symbols-rounded" style="font-size:2rem">hourglass_empty</span></div>
+                            <div class="empty-state-text">No runs pending approval</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Escalated Exceptions -->
+                <div class="card" style="margin-top:1.25rem">
+                    <div class="card-header">
+                        <span class="material-symbols-rounded btn-icon">priority_high</span> Escalated Exceptions
+                        <span class="badge badge-danger" id="escalatedCountBadge" style="margin-left:0.5rem">0</span>
+                    </div>
+                    <div id="escalatedExceptionsList">
+                        <div class="empty-state">
+                            <div class="empty-state-icon"><span class="material-symbols-rounded" style="font-size:2rem">check_circle</span></div>
+                            <div class="empty-state-text">No escalated exceptions</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ─── Settings Tab ──────────────────────────────────── -->
+            <div id="settings" class="tab-content">
+                <div class="card">
+                    <div class="card-header">System Configuration</div>
+                    <div class="settings-section">
+                        <div class="settings-title">Account &amp; Security</div>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <div class="setting-name">Change Password</div>
+                                <div class="setting-desc">Update your login password</div>
+                            </div>
+                            <button class="btn btn-secondary btn-sm" onclick="openModal('changePasswordModal')"><span class="material-symbols-rounded btn-icon">key</span>
+                                Change Password</button>
+                        </div>
+                        <div class="setting-row" id="adminPortalSetting" style="display:none">
+                            <div class="setting-info">
+                                <div class="setting-name">Superadmin Portal</div>
+                                <div class="setting-desc">Manage users, view credentials, and clear database</div>
+                            </div>
+                            <a href="/admin" class="btn btn-secondary btn-sm"><span class="material-symbols-rounded btn-icon">admin_panel_settings</span> Open Admin Portal</a>
+                        </div>
+                    </div>
+                    <div class="settings-section">
+                        <div class="settings-title">Matching Engine</div>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <div class="setting-name">Date Tolerance (Pass 1)</div>
+                                <div class="setting-desc">Maximum days difference for exact ref matching</div>
+                            </div>
+                            <input type="number" class="form-control" style="width:80px" value="3" min="0" max="10">
+                        </div>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <div class="setting-name">GIB Date Tolerance (Pass 3)</div>
+                                <div class="setting-desc">Maximum days for government tax matching</div>
+                            </div>
+                            <input type="number" class="form-control" style="width:80px" value="1" min="0" max="5">
+                        </div>
+                    </div>
+                    <div class="settings-section">
+                        <div class="settings-title">Bank Accounts</div>
+                        <div id="bankAccountsList">
+                            <div class="setting-row">
+                                <div class="setting-info">
+                                    <div class="setting-name">Loading bank accounts...</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="setting-row" id="addBankAccountRow" style="display:none">
+                            <div class="setting-info">
+                                <div class="setting-name">Add New Bank Account</div>
+                                <div class="setting-desc">Configure a new bank for reconciliation</div>
+                            </div>
+                            <button class="btn btn-primary btn-sm" onclick="openModal('addBankAccountModal')">
+                                <span class="material-symbols-rounded btn-icon">add</span> Add Account
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+        <footer class="app-footer">
+            <!-- <img src="/static/images/AIRDC Logo_Final.png" alt="AIRDC" class="footer-logo"> -->
+            <p>&copy; 2026 Brainware University. All rights reserved. Developed by AIRDC</p>
+        </footer>
+    </div><!-- /appShell -->
+
+    <!-- ── Modals ─────────────────────────────────────────────────── -->
+
+    <!-- Comment Modal -->
+    <div class="modal-overlay" id="commentModal">
+        <div class="modal-content">
+            <div class="modal-header">Add Comment</div>
+            <input type="hidden" id="commentExcId">
+            <div class="form-group">
+                <label class="form-label">Comment</label>
+                <textarea class="form-control" id="commentText" rows="4"
+                    placeholder="Add your notes here..."></textarea>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal('commentModal')">Cancel</button>
+                <button class="btn btn-primary" onclick="submitComment()">Add Comment</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Exception Detail Modal -->
+    <div class="modal-overlay" id="excDetailModal">
+        <div class="modal-content" style="max-width:720px">
+            <div class="modal-header">Exception Details</div>
+            <div id="excDetailContent">Loading...</div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal('excDetailModal')">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Change Password Modal -->
+    <div class="modal-overlay" id="changePasswordModal">
+        <div class="modal-content" style="max-width:440px">
+            <div class="modal-header"><span class="material-symbols-rounded" style="vertical-align:middle;margin-right:0.5rem">key</span> Change Password</div>
+            <div class="form-group">
+                <label class="form-label">Current Password</label>
+                <input type="password" class="form-control" id="cpCurrentPassword" autocomplete="current-password">
+            </div>
+            <div class="form-group">
+                <label class="form-label">New Password</label>
+                <input type="password" class="form-control" id="cpNewPassword" autocomplete="new-password">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Confirm New Password</label>
+                <input type="password" class="form-control" id="cpConfirmPassword" autocomplete="new-password">
+            </div>
+            <div id="cpError" class="alert alert-danger" style="display:none"></div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal('changePasswordModal')">Cancel</button>
+                <button class="btn btn-primary" onclick="doChangePassword()">Update Password</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Bank Account Modal -->
+    <div class="modal-overlay" id="addBankAccountModal">
+        <div class="modal-content" style="max-width:520px">
+            <div class="modal-header"><span class="material-symbols-rounded" style="vertical-align:middle;margin-right:0.5rem">account_balance</span> Add Bank Account</div>
+            <div class="form-group">
+                <label class="form-label">Account Number</label>
+                <input type="text" class="form-control" id="newBankAccNo" placeholder="e.g. 082401002764">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Bank Name</label>
+                <input type="text" class="form-control" id="newBankName" placeholder="e.g. ICICI Bank">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Branch</label>
+                <input type="text" class="form-control" id="newBankBranch" placeholder="e.g. Barasat Branch">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Account Type</label>
+                <input type="text" class="form-control" id="newBankAccType" value="Savings" placeholder="e.g. Savings, Current">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Display Label</label>
+                <input type="text" class="form-control" id="newBankLabel" placeholder="e.g. ICICI Savings, Barasat">
+            </div>
+            <div id="bankAccError" class="alert alert-danger" style="display:none"></div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal('addBankAccountModal')">Cancel</button>
+                <button class="btn btn-primary" onclick="doCreateBankAccount()">Add Account</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+
+</body>
+
+</html>

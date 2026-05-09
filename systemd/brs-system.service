@@ -1,0 +1,14 @@
+[Unit]
+Description=Brainware University BRS Automation API
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/brs
+EnvironmentFile=-/opt/brs/.env
+ExecStart=/opt/brs/.venv/bin/python /opt/brs/app.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

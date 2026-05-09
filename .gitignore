@@ -1,0 +1,68 @@
+# ── Python ─────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+build/
+dist/
+*.egg-info/
+*.egg
+
+# ── Virtual environments ───────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+
+# ── Secrets / configuration ────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# ── Databases (never commit live data) ─────────────────────
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
+db/*.db
+
+# ── Sensitive bank data ────────────────────────────────────
+# Bank statements, ledgers, and BRS workbooks must NEVER be committed.
+# Keep them outside the repo, or under a path that is gitignored.
+*.xlsx
+*.xls
+*.csv
+!tests/fixtures/**/*.xlsx
+!tests/fixtures/**/*.xls
+!tests/fixtures/**/*.csv
+
+# ── Runtime data ───────────────────────────────────────────
+uploads/
+output/
+logs/
+*.log
+
+# ── IDE / OS ───────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ── Docker ─────────────────────────────────────────────────
+docker-compose.override.yml
