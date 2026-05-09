@@ -2,8 +2,16 @@
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from pathlib import Path
+
+# Tests must not require real production secrets. Set ephemeral values
+# *before* importing application code (config.py reads env at import time).
+os.environ.setdefault("ENV", "development")
+os.environ.setdefault("SECRET_KEY", "test-secret-key-not-for-production")
+os.environ.setdefault("JWT_SECRET", "test-jwt-secret-not-for-production")
+os.environ.setdefault("CORS_ORIGINS", "http://testserver")
 
 import pytest
 
@@ -75,3 +83,33 @@ def reconciliation_result():
     """Full February 2026 reconciliation result."""
 
     return _reconciliation_result()
+
+
+@pytest.fixture
+def authed_client():
+    """FastAPI TestClient with auth dependency overridden to a test user.
+
+    All API routes require authentication in production; tests stub it out
+    rather than minting real JWTs so the contract is exercised but the
+    cryptographic path doesn't need real secrets.
+    """
+    from fastapi.testclient import TestClient
+
+    import app as app_module
+    from routes.auth import get_current_user
+
+    def _fake_user():
+        return {
+            "id": 1,
+            "username": "test-user",
+            "full_name": "Test User",
+            "role": "system_admin",
+            "is_active": 1,
+        }
+
+    app_module.app.dependency_overrides[get_current_user] = _fake_user
+    try:
+        with TestClient(app_module.app) as client:
+            yield client
+    finally:
+        app_module.app.dependency_overrides.pop(get_current_user, None)

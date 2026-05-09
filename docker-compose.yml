@@ -1,0 +1,38 @@
+services:
+  brs:
+    build: .
+    image: brs-system:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      ENV: production
+      DATABASE_PATH: /app/db/brs.db
+      UPLOAD_FOLDER: /app/uploads
+      OUTPUT_FOLDER: /app/output
+      LOG_DIR: /app/logs
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - brs_db:/app/db
+      - brs_uploads:/app/uploads
+      - brs_output:/app/output
+      - brs_logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  brs_db:
+  brs_uploads:
+  brs_output:
+  brs_logs:

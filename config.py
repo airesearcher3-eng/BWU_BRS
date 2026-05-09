@@ -3,16 +3,77 @@ BRS Automation System — Configuration
 Config-driven parser settings and matching tolerances.
 """
 import os
+import secrets
+import sys
 from dotenv import load_dotenv
 
 load_dotenv()
 
+# ── Environment ───────────────────────────────────────────────────
+ENV = os.getenv("ENV", "development").lower()
+IS_PRODUCTION = ENV in ("production", "prod")
+DEBUG = os.getenv("DEBUG", "false").lower() in ("1", "true", "yes")
+
+
+def _required_secret(name: str, *, dev_default: str | None = None) -> str:
+    """Return a secret env var. Required in production; in development falls
+    back to dev_default if provided, else generates an ephemeral random value
+    so the app still boots locally but tokens won't survive restarts."""
+    value = os.getenv(name)
+    if value:
+        return value
+    if IS_PRODUCTION:
+        sys.stderr.write(
+            f"FATAL: {name} environment variable is required in production. "
+            "Set it in /etc/brs/.env or your container environment.\n"
+        )
+        sys.exit(1)
+    if dev_default is not None:
+        return dev_default
+    # Dev fallback: a random per-process secret. Tokens won't outlive a restart,
+    # but at least we never ship a known value.
+    return secrets.token_urlsafe(48)
+
+
 # ── App settings ──────────────────────────────────────────────────
-SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-key")
-JWT_SECRET = os.getenv("JWT_SECRET", "dev-jwt-secret")
+SECRET_KEY = _required_secret("SECRET_KEY")
+JWT_SECRET = _required_secret("JWT_SECRET")
+JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+JWT_EXPIRY_HOURS = int(os.getenv("JWT_EXPIRY_HOURS", "24"))
+
 DATABASE_PATH = os.getenv("DATABASE_PATH", "db/brs.db")
 UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", "uploads")
 OUTPUT_FOLDER = os.getenv("OUTPUT_FOLDER", "output")
+LOG_DIR = os.getenv("LOG_DIR", "logs")
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+
+# ── HTTP / Security ──────────────────────────────────────────────
+# Comma-separated list of allowed origins for CORS. In production this MUST
+# be set to the real frontend origin(s); a wildcard is rejected when paired
+# with credentials.
+_cors_raw = os.getenv("CORS_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000")
+CORS_ORIGINS = [o.strip() for o in _cors_raw.split(",") if o.strip()]
+if IS_PRODUCTION and (not CORS_ORIGINS or "*" in CORS_ORIGINS):
+    sys.stderr.write(
+        "FATAL: CORS_ORIGINS must be set to explicit origins in production "
+        "(wildcard '*' is not allowed with credentialed requests).\n"
+    )
+    sys.exit(1)
+
+# Comma-separated list of trusted Host headers. Defaults are permissive in dev.
+_hosts_raw = os.getenv("ALLOWED_HOSTS", "*")
+ALLOWED_HOSTS = [h.strip() for h in _hosts_raw.split(",") if h.strip()]
+
+# Upload limits
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))  # 25 MB
+
+# Auth
+PASSWORD_MIN_LENGTH = int(os.getenv("PASSWORD_MIN_LENGTH", "12"))
+LOGIN_RATE_LIMIT = os.getenv("LOGIN_RATE_LIMIT", "5/minute")
+DEFAULT_RATE_LIMIT = os.getenv("DEFAULT_RATE_LIMIT", "120/minute")
+
+# Cleanup
+UPLOAD_MAX_AGE_DAYS = int(os.getenv("UPLOAD_MAX_AGE_DAYS", "60"))
 
 # ── Google Gemini RAG settings ────────────────────────────────────
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")

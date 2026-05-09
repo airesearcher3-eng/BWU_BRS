@@ -1,0 +1,48 @@
+.git
+.gitignore
+.github
+.venv
+venv
+env
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+
+# Never bake secrets or local data into images
+.env
+.env.*
+!.env.example
+*.db
+*.sqlite
+*.sqlite3
+*.db-*
+db/*.db
+uploads/
+output/
+logs/
+*.log
+
+# Bank data
+*.xlsx
+*.xls
+*.csv
+!tests/fixtures/**
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Tests aren't needed at runtime
+tests/
+
+# Docs
+README.md
+docs/

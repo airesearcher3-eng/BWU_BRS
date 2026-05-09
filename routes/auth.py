@@ -3,7 +3,6 @@ Authentication routes — login, token validation, password change.
 """
 from __future__ import annotations
 
-import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -12,13 +11,10 @@ import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+import config
 from models.database import get_connection
 
 router = APIRouter(prefix="/api/auth", tags=["Auth"])
-
-JWT_SECRET = os.getenv("JWT_SECRET", "dev-jwt-secret")
-JWT_ALGORITHM = "HS256"
-JWT_EXPIRY_HOURS = 24
 
 
 # ── Schemas ─────────────────────────────────────────────────────
@@ -40,14 +36,15 @@ def _create_token(user_id: int, username: str, role: str) -> str:
         "sub": str(user_id),
         "username": username,
         "role": role,
-        "exp": datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRY_HOURS),
+        "iat": datetime.now(timezone.utc),
+        "exp": datetime.now(timezone.utc) + timedelta(hours=config.JWT_EXPIRY_HOURS),
     }
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    return jwt.encode(payload, config.JWT_SECRET, algorithm=config.JWT_ALGORITHM)
 
 
 def _decode_token(token: str) -> dict[str, Any]:
     try:
-        return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        return jwt.decode(token, config.JWT_SECRET, algorithms=[config.JWT_ALGORITHM])
     except jwt.ExpiredSignatureError:
         raise HTTPException(401, "Session expired — please log in again")
     except jwt.InvalidTokenError:
@@ -139,8 +136,11 @@ async def get_me(user: dict = Depends(get_current_user)):
 async def change_password(req: ChangePasswordRequest, user: dict = Depends(get_current_user)):
     """Let the logged-in user change their own password."""
 
-    if len(req.new_password) < 6:
-        raise HTTPException(400, "Password must be at least 6 characters")
+    if len(req.new_password) < config.PASSWORD_MIN_LENGTH:
+        raise HTTPException(
+            400,
+            f"Password must be at least {config.PASSWORD_MIN_LENGTH} characters",
+        )
 
     with get_connection() as conn:
         row = conn.execute(
