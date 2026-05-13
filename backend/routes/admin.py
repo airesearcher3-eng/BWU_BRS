@@ -18,6 +18,7 @@ from models.database import (
     insert_bank_account,
     update_bank_account,
 )
+import config
 from routes.auth import get_current_user, require_role
 
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
@@ -81,8 +82,8 @@ async def list_users(user: dict = Depends(require_role("system_admin"))):
 async def create_user(req: CreateUserRequest, admin: dict = Depends(require_role("system_admin"))):
     if req.role not in VALID_ROLES:
         raise HTTPException(400, f"Invalid role. Must be one of: {', '.join(VALID_ROLES)}")
-    if len(req.password) < 6:
-        raise HTTPException(400, "Password must be at least 6 characters")
+    if len(req.password) < config.PASSWORD_MIN_LENGTH:
+        raise HTTPException(400, f"Password must be at least {config.PASSWORD_MIN_LENGTH} characters")
 
     password_hash = bcrypt.hashpw(req.password.encode(), bcrypt.gensalt()).decode()
 

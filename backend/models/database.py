@@ -46,6 +46,7 @@ async def init_db() -> None:
         min_size=2,
         max_size=10,
         command_timeout=60,
+        statement_cache_size=0,          # required for Supabase pgBouncer (transaction mode)
         server_settings={"application_name": "brs-backend"},
     )
     logger.info("Database pool initialised (Supabase/PostgreSQL)")
@@ -302,7 +303,7 @@ async def insert_audit_log(conn, action: str, user_id=None, entity_type=None,
     details_json = json.dumps(details, cls=_SafeJsonEncoder) if details else None
     await conn.execute(
         """INSERT INTO audit_log (user_id, action, entity_type, entity_id,
-           details_json, ip_address)
+           details, ip_address)
            VALUES ($1,$2,$3,$4,$5,$6)""",
         user_id, action, entity_type, entity_id, details_json, ip_address,
     )

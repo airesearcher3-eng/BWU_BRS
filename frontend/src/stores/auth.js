@@ -15,14 +15,9 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function login(username, password) {
-    const form = new URLSearchParams()
-    form.append('username', username)
-    form.append('password', password)
-    const { data } = await api.post('/auth/login', form, {
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    })
-    token.value = data.access_token
-    localStorage.setItem('brs_token', data.access_token)
+    const { data } = await api.post('/auth/login', { username, password })
+    token.value = data.token
+    localStorage.setItem('brs_token', data.token)
     await fetchUser()
   }
 

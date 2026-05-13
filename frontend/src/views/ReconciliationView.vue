@@ -15,9 +15,9 @@
           </div>
         </div>
 
-        <FileUploader label="Bank Statement (XLSX/CSV)" @uploaded="p => form.bank_statement_path = p" />
-        <FileUploader label="Bank Book (XLSX)" @uploaded="p => form.bank_book_path = p" />
-        <FileUploader label="Previous BRS (optional)" optional @uploaded="p => form.previous_brs_path = p" />
+        <FileUploader label="Bank Statement (XLSX/CSV)" upload-type="bank-statement" @uploaded="p => form.bank_statement_path = p" />
+        <FileUploader label="Bank Book (XLSX)" upload-type="bank-book" @uploaded="p => form.bank_book_path = p" />
+        <FileUploader label="Previous BRS (optional)" upload-type="previous-brs" optional @uploaded="p => form.previous_brs_path = p" />
 
         <div class="form-group">
           <label class="checkbox-label">

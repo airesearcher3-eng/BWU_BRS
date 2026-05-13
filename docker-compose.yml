@@ -6,7 +6,7 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     ports:
-      - "80:80"
+      - "3000:80"
     depends_on:
       - backend
     restart: unless-stopped
@@ -22,8 +22,9 @@ services:
       DATABASE_URL:        ${DATABASE_URL}
       ML_SERVICE_URL:      http://ml:8001
       SECRET_KEY:          ${SECRET_KEY}
+      JWT_SECRET:          ${SECRET_KEY}
       JWT_ALGORITHM:       HS256
-      ACCESS_TOKEN_EXPIRE_MINUTES: 480
+      JWT_EXPIRY_HOURS:    8
       LOG_LEVEL:           ${LOG_LEVEL:-INFO}
       UPLOAD_FOLDER:       uploads
       MAX_UPLOAD_BYTES:    ${MAX_UPLOAD_BYTES:-31457280}

@@ -41,7 +41,7 @@
                 <option v-for="r in roles" :key="r" :value="r">{{ r }}</option>
               </select>
             </div>
-            <div class="form-group"><label>Password</label><input v-model="newUser.password" type="password" minlength="6" required /></div>
+            <div class="form-group"><label>Password</label><input v-model="newUser.password" type="password" minlength="12" required /></div>
             <div class="form-group"><label>Email (optional)</label><input v-model="newUser.email" type="email" /></div>
             <p v-if="createError" class="error-msg">{{ createError }}</p>
             <div class="btn-group">

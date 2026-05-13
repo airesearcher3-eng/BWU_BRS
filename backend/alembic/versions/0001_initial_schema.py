@@ -220,7 +220,7 @@ def upgrade() -> None:
     INSERT INTO users (username, password_hash, initial_password, full_name, role)
     VALUES (
         'admin',
-        '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj/t1H5sKv4e',
+        '$2b$12$Xwb6rR5WO/2BjdgDfhYQh.V5G74u/l.H3cIPgQaCYyjTFpzZny7n.',
         'admin123',
         'System Administrator',
         'system_admin'
