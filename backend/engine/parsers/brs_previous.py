@@ -12,6 +12,39 @@ from engine.normaliser import normalise_amount, normalise_date
 from engine.reference_extractor import extract_ref_from_description
 
 
+def _extract_reconciled_balance(worksheet) -> "Decimal | None":
+    """Scan the BRS sheet for the 'Reconcile Balance' row and return column-G value."""
+    from decimal import Decimal
+    for row in worksheet.iter_rows(values_only=True):
+        if not row or row[0] is None:
+            continue
+        cell_a = str(row[0]).strip().lower()
+        if "reconcile balance" in cell_a or "reconciled balance" in cell_a:
+            val = row[6] if len(row) > 6 else None
+            if val is not None:
+                try:
+                    return normalise_amount(val)
+                except Exception:
+                    pass
+    return None
+
+
+def _extract_bank_book_balance(worksheet) -> "Decimal | None":
+    """Scan the BRS sheet for the opening 'Balance as per Bank Book' row (column G)."""
+    for row in worksheet.iter_rows(values_only=True):
+        if not row or row[0] is None:
+            continue
+        cell_a = str(row[0]).strip().lower()
+        if "balance as per bank book" in cell_a and "reconcile" not in cell_a:
+            val = row[6] if len(row) > 6 else None
+            if val is not None:
+                try:
+                    return normalise_amount(val)
+                except Exception:
+                    pass
+    return None
+
+
 SHEET_PATTERN = re.compile(r"^BRS", re.IGNORECASE)
 SECTION_LABELS = {
     "add_cheque_issued": "add: cheque issued but not debited by bank",
@@ -137,6 +170,9 @@ def parse_previous_brs(
         item["refs"] = extract_ref_from_description(item["remarks"])
         items.append(item)
 
+    reconciled_balance = _extract_reconciled_balance(worksheet)
+    bank_book_balance = _extract_bank_book_balance(worksheet)
+
     workbook.close()
 
     pending = [item for item in items if item["is_pending"]]
@@ -147,6 +183,11 @@ def parse_previous_brs(
         "pending_items": pending,
         "resolved_items": resolved,
         "count": len(items),
+        # The reconciled balance from the previous period is what the
+        # current period's bank-book opening balance should equal.
+        "reconciled_balance": reconciled_balance,
+        # The bank-book balance as stated in the previous BRS header.
+        "bank_book_balance": bank_book_balance,
     }
 
 

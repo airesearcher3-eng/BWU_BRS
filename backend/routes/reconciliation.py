@@ -50,6 +50,7 @@ class ReconciliationRequest(BaseModel):
     bank_book_path: str
     previous_brs_path: Optional[str] = None
     previous_brs_sheet: Optional[str] = None
+    portal_data_path: Optional[str] = None
     bank_account_id: Optional[int] = None
     use_rag: bool = False
 
@@ -91,6 +92,7 @@ async def start_reconciliation(req: ReconciliationRequest):
             bank_book_path=req.bank_book_path,
             previous_brs_path=req.previous_brs_path,
             previous_brs_sheet=req.previous_brs_sheet,
+            portal_data_path=req.portal_data_path,
             output_path=output_path,
             bank_account=bank_account,
             use_rag=req.use_rag,

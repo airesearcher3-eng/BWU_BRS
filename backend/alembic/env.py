@@ -1,20 +1,20 @@
 """Alembic env.py — async engine backed by asyncpg."""
 import asyncio
 import os
+import uuid
 from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.pool import NullPool
 
 config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    config.get_main_option("sqlalchemy.url", "postgresql+asyncpg://postgres:postgres@localhost:5432/brs"),
-)
+DATABASE_URL = os.getenv("ALEMBIC_DATABASE_URL") or os.getenv("DATABASE_URL") or \
+    config.get_main_option("sqlalchemy.url", "postgresql+asyncpg://postgres:postgres@localhost:5432/brs")
 # Alembic needs asyncpg driver
 if DATABASE_URL.startswith("postgresql://"):
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
@@ -40,7 +40,16 @@ def do_run_migrations(connection):
 
 
 async def run_migrations_online() -> None:
-    connectable = create_async_engine(DATABASE_URL)
+    # NullPool + statement_cache_size=0 + unique prepared-statement names
+    # are all required to work with Supabase's pgBouncer pooler.
+    connectable = create_async_engine(
+        DATABASE_URL,
+        poolclass=NullPool,
+        connect_args={
+            "statement_cache_size": 0,
+            "prepared_statement_name_func": lambda *a, **kw: f"__ap_{uuid.uuid4().hex}__",
+        },
+    )
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
     await connectable.dispose()

@@ -53,7 +53,21 @@ MR_NO_PATTERN = re.compile(r"BWU\d{4}/\d{4,6}", re.IGNORECASE)
 
 
 # Noise tokens that appear in Tn.No fields but are not useful references.
+# NOTE: "APPR" and "CODE" are kept so that the bare word is not used as a
+# reference, but the numeric approval code that follows them IS extracted
+# separately via _APPR_CODE_RE below.
 _TN_NO_NOISE = frozenset({"UPI", "CR", "DR", "APPR", "CODE", "POS"})
+
+# Pattern to extract POS approval numbers from bank statement descriptions
+# and bank-book Tn.No fields.
+# Examples:
+#   "POS 12345678 MERCHANT NAME APPR CODE 123456"
+#   "Tn. No : APPR CODE 789012"
+#   "APPR No 654321"
+_APPR_CODE_RE = re.compile(
+    r"APPR(?:OVAL)?\s+(?:CODE|No\.?)?\s*([0-9]{4,})",
+    re.IGNORECASE,
+)
 
 # Broader pattern to capture the raw Tn.No / Txn No field value.
 _TN_VALUE_BROAD = re.compile(
@@ -128,6 +142,15 @@ def extract_tn_nos(text: str) -> list[str]:
         if num not in seen:
             seen.add(num)
             refs.append(num)
+
+    # Extract POS approval numbers ("APPR CODE 123456", "APPR No 789012").
+    # These appear in Ujjivan/HDFC bank-book narrations and are 4-8 digit codes
+    # used to cross-reference POS debits on the bank statement.
+    for m in _APPR_CODE_RE.finditer(text or ""):
+        appr = m.group(1)
+        if appr not in seen:
+            seen.add(appr)
+            refs.append(appr)
 
     # Filter noise: direction indicators, non-ref tokens, and name-like tokens.
     refs = [
@@ -237,6 +260,13 @@ def extract_ref_from_description(description: str) -> list[str]:
         match = re.search(r"NEFT[- ]+([A-Z0-9]{8,})", desc, re.IGNORECASE)
         if match:
             refs.append(match.group(1))
+
+    # POS approval number: "APPR CODE 123456" or "APPR No 654321".
+    # Used to cross-reference POS debits between bank statement and bank book.
+    for m in _APPR_CODE_RE.finditer(desc):
+        appr = m.group(1)
+        if appr not in refs:
+            refs.append(appr)
 
     return refs
 

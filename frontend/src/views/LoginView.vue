@@ -2,7 +2,7 @@
   <div class="login-page">
     <div class="login-card">
       <div class="login-logo">
-        <img src="/bwu-logo.png" alt="BWU" onerror="this.style.display='none'" />
+        <img :src="'/bwu-logo.png'" alt="BWU" onerror="this.style.display='none'" />
         <h1>BWU BRS</h1>
         <p>Bank Reconciliation System</p>
       </div>

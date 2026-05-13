@@ -93,3 +93,17 @@ async def upload_previous_brs(
     user: dict = Depends(get_current_user),
 ):
     return await _save_upload(file, "previous_brs", "previous_brs", user)
+
+
+@router.post("/portal-data")
+async def upload_portal_data(
+    file: UploadFile = File(...),
+    user: dict = Depends(get_current_user),
+):
+    """Upload HDFC portal settlement report (Excel/CSV).
+
+    This file is optional.  When provided, individual student payment records
+    from the portal are used to annotate portal settlement match groups and
+    help identify students whose payments caused a reconciliation exception.
+    """
+    return await _save_upload(file, "portal_data", "portal_data", user)

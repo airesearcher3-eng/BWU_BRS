@@ -23,6 +23,7 @@ from engine.normaliser import date_to_iso, decimal_to_float
 from engine.parsers.bank_book import parse_bank_book
 from engine.parsers.bank_statement import parse_bank_statement
 from engine.parsers.brs_previous import parse_previous_brs
+from engine.parsers.hdfc_portal import enrich_portal_matches, parse_hdfc_portal
 
 
 def _serialise_row_for_ml(row: dict) -> dict:
@@ -95,6 +96,7 @@ async def reconcile_workbooks(
     bank_book_path: str | Path,
     previous_brs_path: str | Path | None = None,
     previous_brs_sheet: str | None = None,
+    portal_data_path: str | Path | None = None,
     output_path: str | Path | None = None,
     bank_account: dict | None = None,
     use_rag: bool = False,
@@ -115,6 +117,25 @@ async def reconcile_workbooks(
         )
     else:
         previous_brs_result = {"items": [], "pending_items": [], "resolved_items": []}
+
+    # ── Opening balance cross-validation ────────────────────────────
+    # The bank-book opening balance for the current period must equal the
+    # reconciled balance from the previous BRS.  A mismatch indicates either
+    # a data-entry error in the ERP or that the previous BRS was not finalised.
+    balance_warnings: list[str] = []
+    if previous_brs_path:
+        prev_reconciled = previous_brs_result.get("reconciled_balance")
+        book_opening = bank_book_result.get("opening_balance")
+        if prev_reconciled is not None and book_opening is not None:
+            from decimal import Decimal
+            diff = book_opening - prev_reconciled
+            if abs(diff) > Decimal("0.01"):
+                balance_warnings.append(
+                    f"Opening balance mismatch: Bank Book opening balance is "
+                    f"{book_opening:,.2f} but previous BRS reconciled balance was "
+                    f"{prev_reconciled:,.2f} (difference: {diff:+,.2f}). "
+                    f"Verify that the previous month's BRS was finalised correctly."
+                )
 
     # ── Deterministic 5-pass matching ───────────────────────────────
     match_result: dict = await loop.run_in_executor(
@@ -140,6 +161,17 @@ async def reconcile_workbooks(
         except (httpx.ConnectError, httpx.TimeoutException):
             # ML service unavailable — continue with deterministic results only
             pass
+
+    # ── HDFC portal data enrichment ──────────────────────────────────
+    # Parse the portal report (if supplied) and annotate portal settlement
+    # match groups with individual student payment details.
+    portal_result: dict = {"payments": [], "by_settlement_date": {}, "count": 0}
+    if portal_data_path:
+        portal_result = await loop.run_in_executor(
+            None, parse_hdfc_portal, portal_data_path
+        )
+        if portal_result.get("count", 0) > 0:
+            enrich_portal_matches(match_result, portal_result)
 
     # ── BRS sections & totals ────────────────────────────────────────
     sections = build_brs_sections(
@@ -178,11 +210,13 @@ async def reconcile_workbooks(
         "statement": statement_result,
         "bank_book": bank_book_result,
         "previous_brs": previous_brs_result,
+        "portal_data": portal_result,
         "matching": match_result,
         "sections": sections,
         "totals": totals,
         "exceptions": exceptions,
         "output_file": output_file,
+        "balance_warnings": balance_warnings,
     }
 
 
@@ -207,4 +241,5 @@ def serialise_result(result: dict[str, Any]) -> dict[str, Any]:
         "section_summary": section_summary,
         "totals": totals,
         "output_file": str(result["output_file"]) if result["output_file"] else None,
+        "balance_warnings": result.get("balance_warnings", []),
     }

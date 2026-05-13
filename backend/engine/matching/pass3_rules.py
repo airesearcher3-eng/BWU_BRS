@@ -518,6 +518,75 @@ def run_pass3(
             }
         )
 
+    # ── POS UPI direct payments ─────────────────────────────────────────────
+    # Standalone POS UPI payments (students paying via UPI QR on POS terminal,
+    # NOT through the payment portal gateway) appear in the bank statement
+    # with "POS UPI" in the description.  The bank settles these cumulatively
+    # on the next working day as a single credit or per-terminal batch.
+    # These are distinct from portal UPI settlements (handled below) because
+    # they do not carry "UPI SETTLEMENT -I78231" in the description.
+    pos_upi_stmt = [
+        row for row in statement_rows
+        if not row["matched"]
+        and row["direction"] == "IN"
+        and "POS UPI" in row["description"].upper()
+        and not _is_portal_settlement(row["description"])
+    ]
+    if pos_upi_stmt:
+        pos_upi_by_date: dict[Any, list] = defaultdict(list)
+        for row in pos_upi_stmt:
+            pos_upi_by_date[_row_date(row)].append(row)
+
+        for stmt_date, stmt_group in pos_upi_by_date.items():
+            group_total = sum_amounts(stmt_group)
+
+            # Try batch match: several POS UPI entries sum to one book receipt.
+            for book_row in book_rows:
+                if book_row["matched"] or book_row["direction"] != "IN":
+                    continue
+                if book_row["voucher_type"] not in ("REC", "CNT"):
+                    continue
+                if abs(_row_date(book_row).toordinal() - stmt_date.toordinal()) > 2:
+                    continue
+                if book_row["amount"] == group_total:
+                    still_unmatched = [r for r in stmt_group if not r["matched"]]
+                    if still_unmatched:
+                        matches.append(
+                            mark_match(
+                                "rule_pos_upi_batch",
+                                still_unmatched,
+                                [book_row],
+                                pass_number=3,
+                                notes=(
+                                    f"POS UPI batch settled {stmt_date}: "
+                                    f"{len(still_unmatched)} statement entries"
+                                ),
+                            )
+                        )
+                        break
+
+            # Individual 1:1 POS UPI matches for entries not covered by batch.
+            for stmt_row in [r for r in stmt_group if not r["matched"]]:
+                for book_row in book_rows:
+                    if book_row["matched"] or book_row["direction"] != "IN":
+                        continue
+                    if book_row["voucher_type"] not in ("REC", "CNT"):
+                        continue
+                    if book_row["amount"] != stmt_row["amount"]:
+                        continue
+                    if abs(_row_date(book_row).toordinal() - _row_date(stmt_row).toordinal()) > 2:
+                        continue
+                    matches.append(
+                        mark_match(
+                            "rule_pos_upi",
+                            [stmt_row],
+                            [book_row],
+                            pass_number=3,
+                            notes="POS UPI direct payment 1:1",
+                        )
+                    )
+                    break
+
     # ── Portal settlement matching ──────────────────────────────────────────
     # The university collects fees through its payment portal (Debit/Credit
     # Card, UPI, NEFT, POS).  The bank aggregates and settles these collections
