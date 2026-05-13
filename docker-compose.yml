@@ -1,38 +1,66 @@
 services:
-  brs:
-    build: .
-    image: brs-system:latest
+
+  # -- Frontend � Vue 3 SPA served by Nginx --------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
     restart: unless-stopped
-    env_file: .env
-    environment:
-      ENV: production
-      DATABASE_PATH: /app/db/brs.db
-      UPLOAD_FOLDER: /app/uploads
-      OUTPUT_FOLDER: /app/output
-      LOG_DIR: /app/logs
+
+  # -- Backend � FastAPI + asyncpg ? Supabase ------------------------------
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
     ports:
       - "127.0.0.1:8000:8000"
+    environment:
+      DATABASE_URL:        ${DATABASE_URL}
+      ML_SERVICE_URL:      http://ml:8001
+      SECRET_KEY:          ${SECRET_KEY}
+      JWT_ALGORITHM:       HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: 480
+      LOG_LEVEL:           ${LOG_LEVEL:-INFO}
+      UPLOAD_FOLDER:       uploads
+      MAX_UPLOAD_BYTES:    ${MAX_UPLOAD_BYTES:-31457280}
     volumes:
-      - brs_db:/app/db
       - brs_uploads:/app/uploads
       - brs_output:/app/output
       - brs_logs:/app/logs
+    depends_on:
+      - ml
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/healthz"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz')"]
       interval: 30s
-      timeout: 5s
+      timeout: 10s
       retries: 3
       start_period: 15s
-    read_only: true
-    tmpfs:
-      - /tmp
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
+
+  # -- ML Service � OpenAI Hybrid RAG -------------------------------------
+  ml:
+    build:
+      context: ./ml_service
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:8001:8001"
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      DATABASE_URL:   ${DATABASE_URL}
+      LOG_LEVEL:      ${LOG_LEVEL:-INFO}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
 volumes:
-  brs_db:
   brs_uploads:
   brs_output:
   brs_logs:

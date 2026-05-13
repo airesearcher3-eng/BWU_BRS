@@ -1,4 +1,18 @@
-# ── Python ─────────────────────────────────────────────────
+﻿# ══════════════════════════════════════════════════════════════
+#  BWU BRS — .gitignore
+# ══════════════════════════════════════════════════════════════
+
+# ── Secrets / environment ──────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.p12
+secrets/
+
+# ── Python ────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *$py.class
@@ -7,8 +21,11 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.pytype/
+.pyre/
 .coverage
 .coverage.*
+coverage.xml
 htmlcov/
 .tox/
 .nox/
@@ -16,33 +33,38 @@ build/
 dist/
 *.egg-info/
 *.egg
+pip-wheel-metadata/
+MANIFEST
 
-# ── Virtual environments ───────────────────────────────────
+# ── Virtual environments ───────────────────────────────────────
 .venv/
 venv/
 env/
 ENV/
+backend/.venv/
+ml_service/.venv/
 
-# ── Secrets / configuration ────────────────────────────────
-.env
-.env.*
-!.env.example
-*.pem
-*.key
-secrets/
+# ── Alembic ────────────────────────────────────────────────────
+# Keep versions/ tracked; ignore local env overrides
+backend/alembic.ini.local
 
-# ── Databases (never commit live data) ─────────────────────
-*.db
-*.sqlite
-*.sqlite3
-*.db-journal
-*.db-wal
-*.db-shm
-db/*.db
+# ── Node / Frontend ────────────────────────────────────────────
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+.yarn/
+package-lock.json
 
-# ── Sensitive bank data ────────────────────────────────────
-# Bank statements, ledgers, and BRS workbooks must NEVER be committed.
-# Keep them outside the repo, or under a path that is gitignored.
+# ── Sensitive bank data (NEVER commit) ────────────────────────
+# Bank statements, ledgers, and BRS workbooks must stay outside
+# the repo or under an explicitly gitignored path.
 *.xlsx
 *.xls
 *.csv
@@ -50,19 +72,56 @@ db/*.db
 !tests/fixtures/**/*.xls
 !tests/fixtures/**/*.csv
 
-# ── Runtime data ───────────────────────────────────────────
+# ── Databases ──────────────────────────────────────────────────
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
+
+# ── Runtime data ───────────────────────────────────────────────
 uploads/
 output/
 logs/
 *.log
+*.log.*
+gunicorn_error.log
 
-# ── IDE / OS ───────────────────────────────────────────────
+# ── Docker ─────────────────────────────────────────────────────
+docker-compose.override.yml
+.docker/
+
+# ── IDE / editor ───────────────────────────────────────────────
 .idea/
 .vscode/
 *.swp
 *.swo
-.DS_Store
-Thumbs.db
+*~
+.project
+.settings/
+*.sublime-project
+*.sublime-workspace
 
-# ── Docker ─────────────────────────────────────────────────
-docker-compose.override.yml
+# ── OS ─────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V8
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ── Jupyter ────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── Temporary / misc ───────────────────────────────────────────
+*.tmp
+*.bak
+*.orig
+*.rej
+.cache/
+tmp/
+temp/
