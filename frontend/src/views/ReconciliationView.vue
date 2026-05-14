@@ -19,13 +19,6 @@
         <FileUploader label="Bank Book (XLSX)" upload-type="bank-book" @uploaded="p => form.bank_book_path = p" />
         <FileUploader label="Previous BRS (optional)" upload-type="previous-brs" optional @uploaded="p => form.previous_brs_path = p" />
 
-        <div class="form-group">
-          <label class="checkbox-label">
-            <input v-model="form.use_rag" type="checkbox" />
-            Use AI Hybrid RAG for residual matching
-          </label>
-        </div>
-
         <p v-if="error" class="error-msg">{{ error }}</p>
         <button type="submit" :disabled="!canRun || store.loading" class="btn btn-primary">
           {{ store.loading ? 'Running…' : 'Start Reconciliation' }}
@@ -48,7 +41,7 @@
 
     <div class="card mt-4">
       <div class="card-header"><h3>All Runs</h3></div>
-      <RunTable :runs="store.runs" @download="store.downloadBRS" />
+      <RunTable :runs="store.runs" @download="store.downloadBRS" @matches="store.downloadMatches" @delete="store.deleteRun" />
     </div>
   </div>
 </template>
@@ -61,7 +54,7 @@ import StatsGrid from '@/components/StatsGrid.vue'
 import RunTable from '@/components/RunTable.vue'
 
 const store = useReconciliationStore()
-const form = ref({ period_start: '', period_end: '', bank_statement_path: '', bank_book_path: '', previous_brs_path: '', use_rag: false })
+const form = ref({ period_start: '', period_end: '', bank_statement_path: '', bank_book_path: '', previous_brs_path: '' })
 const result = ref(null)
 const error = ref('')
 

@@ -20,6 +20,15 @@ _TEXT_FORMAT = "%(asctime)s  %(levelname)-8s  %(name)s  %(message)s"
 _DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
+class _RenameUvicornErrorFilter(logging.Filter):
+    """Rename the misleadingly-named 'uvicorn.error' logger to 'uvicorn' in output."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.name == "uvicorn.error":
+            record.name = "uvicorn"
+        return True
+
+
 def configure_logging(base_dir: str | Path) -> None:
     """Install console + rotating-file handlers on the root logger."""
     log_dir = Path(base_dir) / config.LOG_DIR
@@ -27,6 +36,7 @@ def configure_logging(base_dir: str | Path) -> None:
 
     level = getattr(logging, config.LOG_LEVEL, logging.INFO)
     formatter = logging.Formatter(_TEXT_FORMAT, datefmt=_DATE_FORMAT)
+    rename_filter = _RenameUvicornErrorFilter()
 
     root = logging.getLogger()
     # Drop any handlers configured by uvicorn/imports so we own the format.
@@ -36,6 +46,7 @@ def configure_logging(base_dir: str | Path) -> None:
 
     console = logging.StreamHandler(sys.stdout)
     console.setFormatter(formatter)
+    console.addFilter(rename_filter)
     root.addHandler(console)
 
     file_handler = logging.handlers.RotatingFileHandler(
@@ -45,6 +56,7 @@ def configure_logging(base_dir: str | Path) -> None:
         encoding="utf-8",
     )
     file_handler.setFormatter(formatter)
+    file_handler.addFilter(rename_filter)
     root.addHandler(file_handler)
 
     # Align uvicorn loggers with our handlers/format.

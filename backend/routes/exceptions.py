@@ -127,7 +127,7 @@ async def resolve_exception(exc_id: int, req: ResolveRequest):
     async with get_connection() as conn:
         await conn.execute(
             "UPDATE exceptions SET status='resolved', resolution_type=$1, resolved_at=$2 WHERE id=$3",
-            req.resolution_type, datetime.now().isoformat(), exc_id,
+            req.resolution_type, datetime.now(), exc_id,
         )
         await insert_audit_log(conn, "exception_resolved",
                                entity_type="exception", entity_id=exc_id,

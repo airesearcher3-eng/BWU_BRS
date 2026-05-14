@@ -10,7 +10,7 @@
         <RouterLink to="/reconciliation" class="btn btn-sm btn-primary">New Run</RouterLink>
       </div>
       <div v-if="store.loading" class="loading-text">Loading…</div>
-      <RunTable v-else :runs="store.runs.slice(0, 10)" @download="store.downloadBRS" />
+      <RunTable v-else :runs="store.runs.slice(0, 10)" @download="store.downloadBRS" @matches="store.downloadMatches" @delete="store.deleteRun" />
     </div>
   </div>
 </template>

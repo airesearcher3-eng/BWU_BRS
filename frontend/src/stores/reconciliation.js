@@ -42,13 +42,40 @@ export const useReconciliationStore = defineStore('reconciliation', () => {
     }
   }
 
-  function downloadBRS(runId) {
-    window.open(`/api/reconciliation/run/${runId}/download`, '_blank')
+  function _triggerDownload(blob, contentType, filename) {
+    const url = URL.createObjectURL(new Blob([blob], { type: contentType }))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    setTimeout(() => URL.revokeObjectURL(url), 10000)
   }
 
-  function downloadMatches(runId) {
-    window.open(`/api/reconciliation/run/${runId}/matches/download`, '_blank')
+  async function downloadBRS(runId) {
+    try {
+      const { data, headers } = await api.get(`/reconciliation/run/${runId}/download`, { responseType: 'blob' })
+      _triggerDownload(data, headers['content-type'], `BRS_run_${runId}.xlsx`)
+    } catch (e) {
+      alert(`Download failed: ${e.response?.data?.detail || e.message}`)
+    }
   }
 
-  return { runs, currentRun, loading, error, fetchRuns, fetchRun, startRun, downloadBRS, downloadMatches }
+  async function downloadMatches(runId) {
+    try {
+      const { data, headers } = await api.get(`/reconciliation/run/${runId}/matches/download`, { responseType: 'blob' })
+      _triggerDownload(data, headers['content-type'], `Matched_Report_Run_${runId}.xlsx`)
+    } catch (e) {
+      alert(`Download failed: ${e.response?.data?.detail || e.message}`)
+    }
+  }
+
+  async function deleteRun(runId) {
+    if (!confirm(`Delete Run #${runId}? This cannot be undone.`)) return
+    await api.delete(`/reconciliation/run/${runId}`)
+    runs.value = runs.value.filter(r => r.id !== runId)
+  }
+
+  return { runs, currentRun, loading, error, fetchRuns, fetchRun, startRun, downloadBRS, downloadMatches, deleteRun }
 })

@@ -3,10 +3,11 @@ Approval and Sign-off Routes — 3-level approval chain.
 """
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from models.database import get_connection, insert_audit_log, update_run
+from routes.auth import require_role
 
 router = APIRouter(prefix="/api/approval", tags=["Approval"])
 
@@ -36,7 +37,8 @@ async def submit_for_approval(run_id: int):
 
 
 @router.post("/{run_id}/approve")
-async def manager_approve(run_id: int, req: ApprovalRequest):
+async def manager_approve(run_id: int, req: ApprovalRequest,
+                          _user: dict = Depends(require_role("accounts_manager", "system_admin"))):
     async with get_connection() as conn:
         run = await conn.fetchrow("SELECT * FROM runs WHERE id = $1", run_id)
         if not run:
@@ -56,7 +58,8 @@ async def manager_approve(run_id: int, req: ApprovalRequest):
 
 
 @router.post("/{run_id}/signoff")
-async def controller_signoff(run_id: int, req: ApprovalRequest):
+async def controller_signoff(run_id: int, req: ApprovalRequest,
+                             _user: dict = Depends(require_role("finance_controller", "system_admin"))):
     async with get_connection() as conn:
         run = await conn.fetchrow("SELECT * FROM runs WHERE id = $1", run_id)
         if not run:

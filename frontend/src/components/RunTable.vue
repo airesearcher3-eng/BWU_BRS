@@ -15,7 +15,11 @@
           <td>{{ run.auto_match_rate != null ? run.auto_match_rate + '%' : '—' }}</td>
           <td>{{ run.total_pending || 0 }}</td>
           <td>
-            <button class="btn btn-xs btn-primary" @click="$emit('download', run.id)">⬇ BRS</button>
+            <div class="run-actions">
+              <button class="btn btn-xs btn-primary" @click="$emit('download', run.id)">⬇ BRS</button>
+              <button v-if="run.status === 'completed'" class="btn btn-xs btn-secondary" @click="$emit('matches', run.id)">⬇ Match</button>
+              <button class="btn btn-xs btn-danger" @click="$emit('delete', run.id)">✕ Delete</button>
+            </div>
           </td>
         </tr>
       </tbody>
@@ -26,5 +30,9 @@
 
 <script setup>
 defineProps({ runs: { type: Array, default: () => [] } })
-defineEmits(['download'])
+defineEmits(['download', 'matches', 'delete'])
 </script>
+
+<style scoped>
+.run-actions { display: flex; gap: 6px; }
+</style>

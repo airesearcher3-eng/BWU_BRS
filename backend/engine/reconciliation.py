@@ -8,6 +8,7 @@ httpx after the deterministic 5-pass run.
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 from decimal import Decimal
 from pathlib import Path
@@ -99,11 +100,11 @@ async def reconcile_workbooks(
     portal_data_path: str | Path | None = None,
     output_path: str | Path | None = None,
     bank_account: dict | None = None,
-    use_rag: bool = False,
+    use_rag: bool = True,
 ) -> dict[str, Any]:
     """Async wrapper — runs CPU-bound parsing + matching in thread pool."""
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     # ── Parallel parsing (CPU-bound in executor) ────────────────────
     statement_result, bank_book_result = await asyncio.gather(
@@ -147,7 +148,7 @@ async def reconcile_workbooks(
     )
 
     # ── Optional Hybrid RAG for residuals ───────────────────────────
-    if use_rag and (match_result["unmatched_statement"] or match_result["unmatched_book"]):
+    if match_result["unmatched_statement"] or match_result["unmatched_book"]:
         stmt_rows = [_serialise_row_for_ml(r) for r in match_result["unmatched_statement"]]
         book_rows = [_serialise_row_for_ml(r) for r in match_result["unmatched_book"]]
         try:
@@ -196,14 +197,16 @@ async def reconcile_workbooks(
     if output_path:
         output_file = await loop.run_in_executor(
             None,
-            generate_brs_excel,
-            output_path,
-            statement_result["period_end"],
-            bank_book_result["closing_balance"],
-            statement_result["closing_balance"],
-            sections,
-            totals,
-            bank_account,
+            functools.partial(
+                generate_brs_excel,
+                output_path,
+                as_on_date=statement_result["period_end"],
+                bank_book_balance=bank_book_result["closing_balance"],
+                bank_statement_balance=statement_result["closing_balance"],
+                sections=sections,
+                totals=totals,
+                bank_account=bank_account,
+            ),
         )
 
     return {

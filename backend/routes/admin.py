@@ -73,7 +73,7 @@ class UpdateBankAccountRequest(BaseModel):
 async def list_users(user: dict = Depends(require_role("system_admin"))):
     async with get_connection() as conn:
         rows = await conn.fetch(
-            "SELECT id, username, full_name, role, email, is_active, initial_password, created_at FROM users ORDER BY id"
+            "SELECT id, username, full_name, role, email, is_active, created_at FROM users ORDER BY id"
         )
     return [dict(r) for r in rows]
 
@@ -93,9 +93,9 @@ async def create_user(req: CreateUserRequest, admin: dict = Depends(require_role
             raise HTTPException(409, "Username already exists")
 
         new_id = await conn.fetchval(
-            """INSERT INTO users (username, password_hash, initial_password, full_name, role, email)
-               VALUES ($1,$2,$3,$4,$5,$6) RETURNING id""",
-            req.username, password_hash, req.password, req.full_name, req.role, req.email,
+            """INSERT INTO users (username, password_hash, full_name, role, email)
+               VALUES ($1,$2,$3,$4,$5) RETURNING id""",
+            req.username, password_hash, req.full_name, req.role, req.email,
         )
         await insert_audit_log(
             conn, "user_created",
@@ -186,15 +186,15 @@ async def delete_user_permanently(user_id: int, admin: dict = Depends(require_ro
 @router.post("/users/{user_id}/reset-password")
 async def reset_user_password(user_id: int, req: ResetPasswordRequest,
                                admin: dict = Depends(require_role("system_admin"))):
-    if len(req.new_password) < 6:
-        raise HTTPException(400, "Password must be at least 6 characters")
+    if len(req.new_password) < config.PASSWORD_MIN_LENGTH:
+        raise HTTPException(400, f"Password must be at least {config.PASSWORD_MIN_LENGTH} characters")
 
     new_hash = bcrypt.hashpw(req.new_password.encode(), bcrypt.gensalt()).decode()
 
     async with get_connection() as conn:
         await conn.execute(
-            "UPDATE users SET password_hash=$1, initial_password=$2 WHERE id=$3",
-            new_hash, req.new_password, user_id,
+            "UPDATE users SET password_hash=$1 WHERE id=$2",
+            new_hash, user_id,
         )
         await insert_audit_log(
             conn, "password_reset_by_admin",

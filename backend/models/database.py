@@ -116,18 +116,30 @@ async def delete_bank_account(conn, account_id: int) -> None:
 async def insert_run(conn, period_start, period_end, bank_stmt_file=None,
                      bank_book_file=None, prev_brs_file=None, created_by=None,
                      bank_account_id=None) -> int:
+    def _to_date(v):
+        if isinstance(v, str):
+            return date.fromisoformat(v)
+        return v
     return await conn.fetchval(
-        """INSERT INTO runs (period_start, period_end, bank_statement_file,
-           bank_book_file, previous_brs_file, created_by, bank_account_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id""",
-        period_start, period_end, bank_stmt_file, bank_book_file,
-        prev_brs_file, created_by, bank_account_id,
+        """INSERT INTO runs (period_start, period_end, bank_statement_path,
+           bank_book_path, previous_brs_path, bank_account_id)
+           VALUES ($1, $2, $3, $4, $5, $6) RETURNING id""",
+        _to_date(period_start), _to_date(period_end), bank_stmt_file, bank_book_file,
+        prev_brs_file, bank_account_id,
     )
 
 
 async def update_run(conn, run_id: int, **kwargs) -> None:
     if not kwargs:
         return
+    # DATE columns require date objects, not strings
+    for key in ("period_start", "period_end"):
+        if key in kwargs and isinstance(kwargs[key], str):
+            kwargs[key] = date.fromisoformat(kwargs[key])
+    # TIMESTAMP columns require datetime objects, not strings
+    for key in ("completed_at", "started_at", "created_at", "updated_at"):
+        if key in kwargs and isinstance(kwargs[key], str):
+            kwargs[key] = datetime.fromisoformat(kwargs[key])
     parts = [f"{k} = ${i + 1}" for i, k in enumerate(kwargs)]
     values = list(kwargs.values()) + [run_id]
     await conn.execute(
@@ -165,7 +177,7 @@ async def update_transaction_status(conn, txn_id: int, status: str,
                                      pass_number: int | None = None) -> None:
     if pass_number:
         await conn.execute(
-            "UPDATE transactions SET match_status=$1, match_pass=$2 WHERE id=$3",
+            "UPDATE transactions SET match_status=$1, pass_number=$2 WHERE id=$3",
             status, pass_number, txn_id,
         )
     else:
@@ -196,7 +208,7 @@ async def insert_match(conn, run_id, pass_number, match_type, bank_stmt_ids,
                        notes=None) -> None:
     await conn.execute(
         """INSERT INTO matches (run_id, pass_number, match_type, confidence,
-           bank_stmt_txn_ids, bank_book_txn_ids, matched_amount, notes)
+           statement_ids, book_ids, matched_amount, notes)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8)""",
         run_id, pass_number, match_type, confidence,
         json.dumps(bank_stmt_ids), json.dumps(bank_book_ids),
@@ -220,8 +232,11 @@ async def get_match_report(conn, run_id: int) -> dict | None:
 
     for row in match_rows:
         rd = dict(row)
-        stmt_ids = json.loads(rd["bank_stmt_txn_ids"] or "[]")
-        book_ids = json.loads(rd["bank_book_txn_ids"] or "[]")
+        # JSONB columns are auto-decoded by asyncpg to Python objects
+        raw_stmt = rd["statement_ids"]
+        raw_book = rd["book_ids"]
+        stmt_ids = raw_stmt if isinstance(raw_stmt, list) else json.loads(raw_stmt or "[]")
+        book_ids = raw_book if isinstance(raw_book, list) else json.loads(raw_book or "[]")
         stmt_entries = await _get_transactions_by_ids(conn, stmt_ids)
         book_entries = await _get_transactions_by_ids(conn, book_ids)
 

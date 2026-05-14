@@ -1,20 +1,15 @@
-"""Dense retrieval using sentence-transformers/all-MiniLM-L6-v2 (384 dims)."""
+"""Dense retrieval using OpenAI text-embedding-3-small (1536 dims)."""
 from __future__ import annotations
 
-import asyncio
-from functools import lru_cache
+import os
 
 import numpy as np
+from openai import AsyncOpenAI
 from typing import Any
-from sentence_transformers import SentenceTransformer
 
-_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+_EMBED_MODEL = "text-embedding-3-small"
+_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-
-@lru_cache(maxsize=1)
-def _get_model() -> SentenceTransformer:
-    """Load the model once and cache it for the lifetime of the process."""
-    return SentenceTransformer(_MODEL_NAME)
 
 
 def transaction_to_text(row: dict[str, Any]) -> str:
@@ -59,15 +54,12 @@ def transaction_to_text(row: dict[str, Any]) -> str:
 
 
 async def generate_embeddings(rows: list[dict[str, Any]]) -> np.ndarray:
-    """Return (N, 384) float32 embedding matrix for a list of transaction rows."""
+    """Return (N, 1536) float32 embedding matrix using OpenAI text-embedding-3-small."""
     texts = [transaction_to_text(r) for r in rows]
-    model = _get_model()
-    loop = asyncio.get_event_loop()
-    arr: np.ndarray = await loop.run_in_executor(
-        None,
-        lambda: model.encode(texts, convert_to_numpy=True, normalize_embeddings=True),
-    )
-    return arr.astype(np.float32)
+    resp = await _client.embeddings.create(model=_EMBED_MODEL, input=texts)
+    # OpenAI returns items in the same order as input, but sort by index to be safe
+    vecs = [item.embedding for item in sorted(resp.data, key=lambda x: x.index)]
+    return np.array(vecs, dtype=np.float32)
 
 
 def cosine_similarity_matrix(query: np.ndarray, corpus: np.ndarray) -> np.ndarray:

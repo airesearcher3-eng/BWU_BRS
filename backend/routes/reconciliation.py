@@ -1,14 +1,19 @@
 """FastAPI routes for running and downloading reconciliations."""
 from __future__ import annotations
 
+import asyncio
+import functools
+import hashlib
 import io
+import json
 import os
+import tempfile
 from collections import Counter
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -16,6 +21,8 @@ from pydantic import BaseModel
 
 from engine.reconciliation import reconcile_workbooks, serialise_result
 from engine.normaliser import date_to_iso, decimal_to_float
+from engine.brs_output import generate_brs_excel
+from routes.auth import require_role
 from models.database import (
     get_bank_account,
     get_connection,
@@ -52,7 +59,6 @@ class ReconciliationRequest(BaseModel):
     previous_brs_sheet: Optional[str] = None
     portal_data_path: Optional[str] = None
     bank_account_id: Optional[int] = None
-    use_rag: bool = False
 
 
 @router.post("/run")
@@ -95,7 +101,7 @@ async def start_reconciliation(req: ReconciliationRequest):
             portal_data_path=req.portal_data_path,
             output_path=output_path,
             bank_account=bank_account,
-            use_rag=req.use_rag,
+            use_rag=True,
         )
         summary = serialise_result(result)
 
@@ -119,7 +125,7 @@ async def start_reconciliation(req: ReconciliationRequest):
                 total_unmatched=len(result["matching"]["unmatched_statement"]) + len(result["matching"]["unmatched_book"]),
                 total_pending=len(result["exceptions"]),
                 brs_output_path=str(output_path),
-                completed_at=datetime.now().isoformat(),
+                completed_at=datetime.now(),
             )
             await insert_audit_log(
                 conn, "run_completed",
@@ -160,6 +166,24 @@ async def list_runs():
     async with get_connection() as conn:
         rows = await conn.fetch("SELECT * FROM runs ORDER BY created_at DESC LIMIT 50")
     return [dict(r) for r in rows]
+
+
+@router.delete("/run/{run_id}")
+async def delete_run(run_id: int, _user: dict = Depends(require_role("system_admin", "finance_controller"))):
+    """Delete a reconciliation run and all associated data (cascaded by DB)."""
+    async with get_connection() as conn:
+        run = await get_run(conn, run_id)
+        if not run:
+            raise HTTPException(404, "Run not found")
+        # Remove output file from disk if it exists
+        output_path = run.get("brs_output_path")
+        if output_path and os.path.exists(output_path):
+            try:
+                os.remove(output_path)
+            except OSError:
+                pass
+        await conn.execute("DELETE FROM runs WHERE id = $1", run_id)
+    return {"deleted": run_id}
 
 
 @router.get("/run/{run_id}")
@@ -277,19 +301,23 @@ async def download_matches_excel(run_id: int):
                 if row_offset == 0 else ["", "", "", "", "", ""]
             if row_offset < len(stmt_entries):
                 s = stmt_entries[row_offset]
+                refs = s.get("references_json") or []
+                if isinstance(refs, str): refs = json.loads(refs)
                 row_data += [s.get("transaction_date", ""), s.get("amount", ""),
                              s.get("direction", ""),
                              s.get("description") or s.get("narration", ""),
-                             ", ".join(s.get("references", []))]
+                             ", ".join(str(r) for r in refs)]
             else:
                 row_data += ["", "", "", "", ""]
             if row_offset < len(book_entries):
                 b = book_entries[row_offset]
+                brefs = b.get("references_json") or []
+                if isinstance(brefs, str): brefs = json.loads(brefs)
                 row_data += [b.get("transaction_date", ""), b.get("amount", ""),
                              b.get("direction", ""),
                              b.get("narration") or b.get("description", ""),
                              b.get("voucher_type", ""), b.get("voucher_no", ""),
-                             ", ".join(b.get("references", []))]
+                             ", ".join(str(r) for r in brefs)]
             else:
                 row_data += ["", "", "", "", "", "", ""]
             ws.append(row_data)
@@ -317,17 +345,128 @@ async def download_brs(run_id: int):
             raise HTTPException(404, "Run not found")
 
     output_path = run.get("brs_output_path")
-    if not output_path or not os.path.exists(output_path):
-        raise HTTPException(404, "BRS output file not found")
+    if output_path and os.path.exists(output_path):
+        return FileResponse(
+            output_path,
+            filename=os.path.basename(output_path),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
 
-    return FileResponse(
-        output_path,
-        filename=os.path.basename(output_path),
+    # File missing (e.g. volume wiped) — regenerate from DB
+    async with get_connection() as conn:
+        buffer = await _regenerate_brs_from_db(conn, run)
+    return StreamingResponse(
+        buffer,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="BRS_run_{run_id}.xlsx"'},
     )
 
 
 # ── Helpers ───────────────────────────────────────────────────────
+
+async def _regenerate_brs_from_db(conn, run: dict) -> io.BytesIO:
+    """Rebuild the BRS Excel entirely from DB records when the file is missing."""
+    run_id = run["id"]
+
+    # Unmatched bank-book rows → cheque-issued (OUT) / cheque-deposit (IN)
+    book_rows = await conn.fetch(
+        "SELECT transaction_date, narration, description, cheque_no, amount, direction "
+        "FROM transactions WHERE run_id=$1 AND source='bank_book' AND match_status='unmatched' "
+        "ORDER BY transaction_date", run_id,
+    )
+    # Unmatched statement rows → bank-credit (IN) / bank-debit (OUT)
+    stmt_rows = await conn.fetch(
+        "SELECT transaction_date, description, narration, cheque_no, amount, direction "
+        "FROM transactions WHERE run_id=$1 AND source='bank_statement' AND match_status='unmatched' "
+        "ORDER BY transaction_date", run_id,
+    )
+    # Carry-forward items
+    cf_rows = await conn.fetch(
+        "SELECT brs_section, original_date, remarks, cheque_no, amount, cleared_date "
+        "FROM carry_forward WHERE run_id=$1 ORDER BY original_date", run_id,
+    )
+
+    sections: dict[str, list] = {
+        "add_cheque_issued": [], "add_bank_credit": [],
+        "less_cheque_deposit": [], "less_bank_debit": [],
+    }
+
+    def _parse_date(val):
+        if val is None:
+            return None
+        if isinstance(val, date):
+            return val
+        try:
+            return date.fromisoformat(str(val)[:10])
+        except (ValueError, TypeError):
+            return None
+
+    for r in book_rows:
+        key = "add_cheque_issued" if r["direction"] == "OUT" else "less_cheque_deposit"
+        sections[key].append({"date": _parse_date(r["transaction_date"]),
+                               "amount": float(r["amount"] or 0),
+                               "remarks": r["narration"] or r["description"] or "",
+                               "cheque_no": r["cheque_no"]})
+    for r in stmt_rows:
+        key = "add_bank_credit" if r["direction"] == "IN" else "less_bank_debit"
+        sections[key].append({"date": _parse_date(r["transaction_date"]),
+                               "amount": float(r["amount"] or 0),
+                               "remarks": r["description"] or r["narration"] or "",
+                               "cheque_no": r["cheque_no"]})
+    for r in cf_rows:
+        sec = r["brs_section"]
+        if sec in sections:
+            sections[sec].append({"date": _parse_date(r["original_date"]),
+                                   "amount": float(r["amount"] or 0),
+                                   "remarks": r["remarks"] or "", "cheque_no": r["cheque_no"],
+                                   "cleared_on": _parse_date(r["cleared_date"])})
+
+    bb = float(run.get("bank_book_balance") or 0)
+    bs = float(run.get("bank_statement_balance") or 0)
+    add_cheque   = sum(i["amount"] for i in sections["add_cheque_issued"])
+    add_credit   = sum(i["amount"] for i in sections["add_bank_credit"])
+    less_deposit = sum(i["amount"] for i in sections["less_cheque_deposit"])
+    less_debit   = sum(i["amount"] for i in sections["less_bank_debit"])
+    reconciled   = bb + add_cheque + add_credit - less_deposit - less_debit
+    totals = {"bank_book_balance": bb, "bank_statement_balance": bs,
+              "add_cheque_issued": add_cheque, "add_bank_credit": add_credit,
+              "less_cheque_deposit": less_deposit, "less_bank_debit": less_debit,
+              "reconciled_balance": reconciled, "difference": reconciled - bs}
+
+    bank_account = None
+    if run.get("bank_account_id"):
+        bank_account = await get_bank_account(conn, run["bank_account_id"])
+
+    as_on_date = run.get("period_end")
+    if isinstance(as_on_date, str):
+        as_on_date = date.fromisoformat(as_on_date)
+    if not as_on_date:
+        as_on_date = date.today()
+
+    # generate_brs_excel writes to a path; use a temp file then stream back
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        tmp_path = tmp.name
+    try:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None,
+            functools.partial(
+                generate_brs_excel, tmp_path,
+                as_on_date=as_on_date, bank_book_balance=bb,
+                bank_statement_balance=bs, sections=sections,
+                totals=totals, bank_account=bank_account,
+            ),
+        )
+        with open(tmp_path, "rb") as f:
+            buf = io.BytesIO(f.read())
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+    buf.seek(0)
+    return buf
+
 
 async def _reconstruct_section_totals(conn, run_id: int) -> dict | None:
     book_unmatched = await conn.fetch(
@@ -494,6 +633,5 @@ def _build_match_pass_maps(matches: list) -> tuple[dict, dict]:
 
 
 def _carry_forward_hash(run_id: int, item: dict) -> str:
-    import hashlib
     raw = f"cf|{run_id}|{item['row_number']}|{item['amount']}|{item['original_date']}"
     return hashlib.sha256(raw.encode()).hexdigest()
