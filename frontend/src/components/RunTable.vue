@@ -17,7 +17,7 @@
           <td>
             <div class="run-actions">
               <button class="btn btn-xs btn-primary" @click="$emit('download', run.id)">⬇ BRS</button>
-              <button v-if="run.status === 'completed'" class="btn btn-xs btn-secondary" @click="$emit('matches', run.id)">⬇ Match</button>
+              <button v-if="!['running','failed'].includes(run.status)" class="btn btn-xs btn-secondary" @click="$emit('matches', run.id)">⬇ Match</button>
               <button class="btn btn-xs btn-danger" @click="$emit('delete', run.id)">✕ Delete</button>
             </div>
           </td>
@@ -34,5 +34,5 @@ defineEmits(['download', 'matches', 'delete'])
 </script>
 
 <style scoped>
-.run-actions { display: flex; gap: 6px; }
+.run-actions { display: flex; gap: 5px; align-items: center; flex-wrap: nowrap; }
 </style>

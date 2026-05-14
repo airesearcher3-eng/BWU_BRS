@@ -112,7 +112,7 @@ async def readyz():
         async with get_connection() as conn:
             await conn.fetchval("SELECT 1")
     except Exception as exc:
-        logger.exception("readyz failure")
+        logger.warning("readyz: database not ready — %s: %s", type(exc).__name__, exc)
         return JSONResponse({"status": "degraded", "error": str(exc)}, status_code=503)
     return {"status": "ready"}
 

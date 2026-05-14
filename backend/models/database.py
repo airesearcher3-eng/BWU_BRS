@@ -46,7 +46,9 @@ async def init_db() -> None:
         min_size=2,
         max_size=10,
         command_timeout=60,
-        statement_cache_size=0,          # required for Supabase pgBouncer (transaction mode)
+        statement_cache_size=0,               # required for pgBouncer transaction mode
+        max_inactive_connection_lifetime=300, # discard idle connections after 5 min;
+                                              # keeps pool fresh before pgBouncer closes them
         server_settings={"application_name": "brs-backend"},
     )
     logger.info("Database pool initialised (Supabase/PostgreSQL)")
@@ -61,12 +63,27 @@ async def close_db() -> None:
 
 @asynccontextmanager
 async def get_connection():
-    """Async context manager yielding an asyncpg connection with a transaction."""
+    """Async context manager yielding an asyncpg connection with a transaction.
+
+    Manually manages the transaction lifecycle so that if the connection dies
+    mid-operation (e.g. pgBouncer closes it), the rollback attempt is suppressed
+    instead of raising a secondary InterfaceError that masks the real error.
+    """
     if _pool is None:
         raise RuntimeError("Database pool not initialised — call init_db() first")
     async with _pool.acquire() as conn:
-        async with conn.transaction():
+        tx = conn.transaction()
+        await tx.start()
+        try:
             yield conn
+            await tx.commit()
+        except BaseException as exc:
+            try:
+                await tx.rollback()
+            except (asyncpg.InterfaceError, asyncpg.exceptions.ConnectionDoesNotExistError):
+                # Connection already gone — pool will discard it; re-raise original error.
+                pass
+            raise
 
 
 # ── Bank Accounts ────────────────────────────────────────────────

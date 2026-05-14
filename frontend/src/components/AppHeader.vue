@@ -28,3 +28,21 @@ const auth = useAuthStore()
 const isAdmin = computed(() => auth.user?.role === 'system_admin')
 const canAudit = computed(() => ['system_admin', 'accounts_manager', 'internal_auditor'].includes(auth.user?.role))
 </script>
+
+<style scoped>
+.header-user .btn-secondary {
+  background: rgba(255,255,255,.1);
+  color: rgba(255,255,255,.8);
+  border-color: rgba(255,255,255,.15);
+}
+.header-user .btn-secondary:hover {
+  background: rgba(255,255,255,.18);
+  color: #fff;
+  border-color: rgba(255,255,255,.25);
+}
+.header-user .btn-danger {
+  background: rgba(220,38,38,.75);
+  box-shadow: none;
+}
+.header-user .btn-danger:hover { background: rgba(220,38,38,.95); }
+</style>

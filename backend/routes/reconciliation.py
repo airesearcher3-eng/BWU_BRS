@@ -233,6 +233,13 @@ async def get_run_matches(run_id: int):
 
 
 @router.get("/run/{run_id}/matches/download")
+def _strip_tz(val):
+    """Remove tzinfo from datetime/date so openpyxl can write the cell."""
+    if isinstance(val, datetime) and val.tzinfo is not None:
+        return val.replace(tzinfo=None)
+    return val
+
+
 async def download_matches_excel(run_id: int):
     async with get_connection() as conn:
         report = await get_match_report(conn, run_id)
@@ -254,7 +261,7 @@ async def download_matches_excel(run_id: int):
     ws_summary["A1"].font = Font(bold=True, size=14)
     ws_summary.append([])
     ws_summary.append(["Period", f"{report.get('period_start', '')} to {report.get('period_end', '')}"])
-    ws_summary.append(["Completed At", report.get("completed_at", "")])
+    ws_summary.append(["Completed At", _strip_tz(report.get("completed_at", ""))])
     ws_summary.append(["Total Match Groups", report["match_count"]])
     ws_summary.append(["Statement Entries Matched", report["statement_entry_count"]])
     ws_summary.append(["Book Entries Matched", report["bank_book_entry_count"]])
@@ -303,7 +310,7 @@ async def download_matches_excel(run_id: int):
                 s = stmt_entries[row_offset]
                 refs = s.get("references_json") or []
                 if isinstance(refs, str): refs = json.loads(refs)
-                row_data += [s.get("transaction_date", ""), s.get("amount", ""),
+                row_data += [_strip_tz(s.get("transaction_date", "")), s.get("amount", ""),
                              s.get("direction", ""),
                              s.get("description") or s.get("narration", ""),
                              ", ".join(str(r) for r in refs)]
@@ -313,7 +320,7 @@ async def download_matches_excel(run_id: int):
                 b = book_entries[row_offset]
                 brefs = b.get("references_json") or []
                 if isinstance(brefs, str): brefs = json.loads(brefs)
-                row_data += [b.get("transaction_date", ""), b.get("amount", ""),
+                row_data += [_strip_tz(b.get("transaction_date", "")), b.get("amount", ""),
                              b.get("direction", ""),
                              b.get("narration") or b.get("description", ""),
                              b.get("voucher_type", ""), b.get("voucher_no", ""),
