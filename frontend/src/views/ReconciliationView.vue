@@ -21,7 +21,7 @@
 
         <p v-if="error" class="error-msg">{{ error }}</p>
         <button type="submit" :disabled="!canRun || store.loading" class="btn btn-primary">
-          {{ store.loading ? 'Running…' : 'Start Reconciliation' }}
+          {{ store.loading ? `Running… (${elapsed}s)` : 'Start Reconciliation' }}
         </button>
       </form>
     </div>
@@ -47,7 +47,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useReconciliationStore } from '@/stores/reconciliation'
 import FileUploader from '@/components/FileUploader.vue'
 import StatsGrid from '@/components/StatsGrid.vue'
@@ -57,26 +57,34 @@ const store = useReconciliationStore()
 const form = ref({ period_start: '', period_end: '', bank_statement_path: '', bank_book_path: '', previous_brs_path: '' })
 const result = ref(null)
 const error = ref('')
+const elapsed = ref(0)
+let elapsedTimer = null
 
 onMounted(() => store.fetchRuns())
+onUnmounted(() => clearInterval(elapsedTimer))
 
 const canRun = computed(() => form.value.bank_statement_path && form.value.bank_book_path)
 
 const resultStats = computed(() => result.value ? [
-  { label: 'Stmt Entries', value: result.value.total_bank_stmt },
-  { label: 'Book Entries', value: result.value.total_bank_book },
+  { label: 'Stmt Entries', value: result.value.total_bank_stmt_entries ?? result.value.total_bank_stmt },
+  { label: 'Book Entries', value: result.value.total_bank_book_entries ?? result.value.total_bank_book },
   { label: 'Matched', value: result.value.total_matched },
-  { label: 'Match Rate', value: `${result.value.auto_match_rate}%` },
-  { label: 'Exceptions', value: result.value.exception_count },
+  { label: 'Match Rate', value: result.value.total_matched != null ? `${Math.round(result.value.total_matched / Math.max(result.value.total_bank_stmt_entries ?? result.value.total_bank_stmt ?? 1, 1) * 100)}%` : '—' },
+  { label: 'Exceptions', value: result.value.total_pending ?? result.value.exception_count },
 ] : [])
 
 async function run() {
   error.value = ''
   result.value = null
+  elapsed.value = 0
+  elapsedTimer = setInterval(() => elapsed.value++, 1000)
   try {
     result.value = await store.startRun(form.value)
   } catch (e) {
     error.value = e.response?.data?.detail || e.message
+  } finally {
+    clearInterval(elapsedTimer)
+    elapsedTimer = null
   }
 }
 </script>

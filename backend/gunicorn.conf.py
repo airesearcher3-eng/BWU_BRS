@@ -10,7 +10,7 @@ import os
 bind = os.getenv("BIND", "0.0.0.0:8000")
 workers = int(os.getenv("WEB_CONCURRENCY", str(max(2, multiprocessing.cpu_count()))))
 worker_class = "uvicorn.workers.UvicornWorker"
-timeout = int(os.getenv("GUNICORN_TIMEOUT", "120"))
+timeout = int(os.getenv("GUNICORN_TIMEOUT", "600"))
 graceful_timeout = 30
 keepalive = 5
 max_requests = int(os.getenv("GUNICORN_MAX_REQUESTS", "1000"))

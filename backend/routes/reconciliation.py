@@ -13,7 +13,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -61,9 +61,70 @@ class ReconciliationRequest(BaseModel):
     bank_account_id: Optional[int] = None
 
 
+async def _run_reconciliation_task(
+    run_id: int,
+    req_dict: dict,
+    bank_account: dict | None,
+) -> None:
+    """Background task: runs the full reconciliation pipeline and updates the DB."""
+    output_dir = BASE_DIR / "output"
+    output_path = output_dir / f"BRS_run_{run_id}.xlsx"
+    try:
+        result = await reconcile_workbooks(
+            statement_path=req_dict["bank_statement_path"],
+            bank_book_path=req_dict["bank_book_path"],
+            previous_brs_path=req_dict.get("previous_brs_path"),
+            previous_brs_sheet=req_dict.get("previous_brs_sheet"),
+            portal_data_path=req_dict.get("portal_data_path"),
+            output_path=output_path,
+            bank_account=bank_account,
+            use_rag=True,
+        )
+        summary = serialise_result(result)
+
+        async with get_connection() as conn:
+            await _persist_run_artifacts(conn, run_id, result)
+            await update_run(
+                conn,
+                run_id,
+                status="completed",
+                period_start=(req_dict.get("period_start") or result["statement"]["period_start"].isoformat()),
+                period_end=(req_dict.get("period_end") or result["statement"]["period_end"].isoformat()),
+                bank_book_balance=summary["totals"]["bank_book_balance"],
+                bank_statement_balance=summary["totals"]["bank_statement_balance"],
+                total_bank_stmt_entries=summary["statement_count"],
+                total_bank_book_entries=summary["bank_book_count"],
+                pass1_matches=result["matching"]["pass_counts"].get(1, 0),
+                pass2_matches=result["matching"]["pass_counts"].get(2, 0),
+                pass3_matches=result["matching"]["pass_counts"].get(3, 0),
+                pass4_matches=result["matching"]["pass_counts"].get(4, 0),
+                total_matched=summary["statement_count"] - len(result["matching"]["unmatched_statement"]),
+                total_unmatched=len(result["matching"]["unmatched_statement"]) + len(result["matching"]["unmatched_book"]),
+                total_pending=len(result["exceptions"]),
+                brs_output_path=str(output_path),
+                completed_at=datetime.now(),
+            )
+            await insert_audit_log(
+                conn, "run_completed",
+                entity_type="run", entity_id=run_id,
+                details=summary,
+            )
+    except Exception as exc:
+        try:
+            async with get_connection() as conn:
+                await update_run(conn, run_id, status="failed")
+                await insert_audit_log(
+                    conn, "run_failed",
+                    entity_type="run", entity_id=run_id,
+                    details={"error": str(exc)},
+                )
+        except Exception:
+            pass
+
+
 @router.post("/run")
-async def start_reconciliation(req: ReconciliationRequest):
-    """Run the reconciliation pipeline and persist a summary row."""
+async def start_reconciliation(req: ReconciliationRequest, background_tasks: BackgroundTasks):
+    """Start the reconciliation pipeline. Returns immediately with run_id; poll GET /run/{id} for status."""
 
     if not os.path.exists(req.bank_statement_path):
         raise HTTPException(400, f"Bank statement file not found: {req.bank_statement_path}")
@@ -89,76 +150,14 @@ async def start_reconciliation(req: ReconciliationRequest):
         )
         await insert_audit_log(conn, "run_started", entity_type="run", entity_id=run_id)
 
-    output_dir = BASE_DIR / "output"
-    output_path = output_dir / f"BRS_run_{run_id}.xlsx"
+    background_tasks.add_task(
+        _run_reconciliation_task,
+        run_id,
+        req.model_dump(),
+        bank_account,
+    )
 
-    try:
-        result = await reconcile_workbooks(
-            statement_path=req.bank_statement_path,
-            bank_book_path=req.bank_book_path,
-            previous_brs_path=req.previous_brs_path,
-            previous_brs_sheet=req.previous_brs_sheet,
-            portal_data_path=req.portal_data_path,
-            output_path=output_path,
-            bank_account=bank_account,
-            use_rag=True,
-        )
-        summary = serialise_result(result)
-
-        async with get_connection() as conn:
-            await _persist_run_artifacts(conn, run_id, result)
-            await update_run(
-                conn,
-                run_id,
-                status="completed",
-                period_start=(req.period_start or result["statement"]["period_start"].isoformat()),
-                period_end=(req.period_end or result["statement"]["period_end"].isoformat()),
-                bank_book_balance=summary["totals"]["bank_book_balance"],
-                bank_statement_balance=summary["totals"]["bank_statement_balance"],
-                total_bank_stmt_entries=summary["statement_count"],
-                total_bank_book_entries=summary["bank_book_count"],
-                pass1_matches=result["matching"]["pass_counts"].get(1, 0),
-                pass2_matches=result["matching"]["pass_counts"].get(2, 0),
-                pass3_matches=result["matching"]["pass_counts"].get(3, 0),
-                pass4_matches=result["matching"]["pass_counts"].get(4, 0),
-                total_matched=summary["statement_count"] - len(result["matching"]["unmatched_statement"]),
-                total_unmatched=len(result["matching"]["unmatched_statement"]) + len(result["matching"]["unmatched_book"]),
-                total_pending=len(result["exceptions"]),
-                brs_output_path=str(output_path),
-                completed_at=datetime.now(),
-            )
-            await insert_audit_log(
-                conn, "run_completed",
-                entity_type="run", entity_id=run_id,
-                details=summary,
-            )
-
-    except Exception as exc:
-        async with get_connection() as conn:
-            await update_run(conn, run_id, status="failed")
-            await insert_audit_log(
-                conn, "run_failed",
-                entity_type="run", entity_id=run_id,
-                details={"error": str(exc)},
-            )
-        raise HTTPException(500, str(exc)) from exc
-
-    total_matched = summary["statement_count"] - len(result["matching"]["unmatched_statement"])
-    total_unmatched = len(result["matching"]["unmatched_statement"]) + len(result["matching"]["unmatched_book"])
-    auto_match_rate = round((total_matched / max(summary["statement_count"], 1)) * 100, 1)
-
-    return {
-        "run_id": run_id,
-        "total_bank_stmt": summary["statement_count"],
-        "total_bank_book": summary["bank_book_count"],
-        "total_matched": total_matched,
-        "total_unmatched": total_unmatched,
-        "auto_match_rate": auto_match_rate,
-        "carry_forward": len(result["matching"]["pending_carry_forward_items"]),
-        "exception_count": len(result["exceptions"]),
-        "pass_counts": result["matching"]["pass_counts"],
-        **summary,
-    }
+    return {"run_id": run_id, "status": "running"}
 
 
 @router.get("/runs")

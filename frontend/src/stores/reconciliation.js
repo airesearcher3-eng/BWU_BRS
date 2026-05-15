@@ -31,9 +31,41 @@ export const useReconciliationStore = defineStore('reconciliation', () => {
     loading.value = true
     error.value = null
     try {
-      const { data } = await api.post('/reconciliation/run', payload)
+      // POST returns immediately with { run_id, status: "running" }
+      const { data: started } = await api.post('/reconciliation/run', payload)
+      const runId = started.run_id
+
+      // Poll GET /run/{id} every 3 s until completed or failed
+      await new Promise((resolve, reject) => {
+        const INTERVAL = 3000
+        const MAX_WAIT = 20 * 60 * 1000 // 20 minutes hard cap
+        const startedAt = Date.now()
+        const timer = setInterval(async () => {
+          try {
+            if (Date.now() - startedAt > MAX_WAIT) {
+              clearInterval(timer)
+              reject(new Error('Reconciliation timed out after 20 minutes'))
+              return
+            }
+            const { data: run } = await api.get(`/reconciliation/run/${runId}`)
+            if (run.status === 'completed') {
+              clearInterval(timer)
+              currentRun.value = run
+              resolve(run)
+            } else if (run.status === 'failed') {
+              clearInterval(timer)
+              reject(new Error(`Run #${runId} failed. Check audit logs for details.`))
+            }
+            // still "running" — keep polling
+          } catch (pollErr) {
+            clearInterval(timer)
+            reject(pollErr)
+          }
+        }, INTERVAL)
+      })
+
       await fetchRuns()
-      return data
+      return currentRun.value
     } catch (e) {
       error.value = e.response?.data?.detail || e.message
       throw e
