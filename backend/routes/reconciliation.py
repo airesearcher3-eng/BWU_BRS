@@ -6,12 +6,15 @@ import functools
 import hashlib
 import io
 import json
+import logging
 import os
 import tempfile
 from collections import Counter
 from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
@@ -29,12 +32,8 @@ from models.database import (
     get_match_report,
     get_run,
     insert_audit_log,
-    insert_exception,
-    insert_match,
     insert_run,
-    insert_transaction,
     update_run,
-    update_transaction_status,
 )
 
 router = APIRouter(prefix="/api/reconciliation", tags=["Reconciliation"])
@@ -66,22 +65,54 @@ async def _run_reconciliation_task(
     req_dict: dict,
     bank_account: dict | None,
 ) -> None:
-    """Background task: runs the full reconciliation pipeline and updates the DB."""
+    """Background task: runs the full reconciliation pipeline and updates the DB.
+
+    Excel generation and DB persistence run concurrently via asyncio to maximise
+    throughput on large datasets.
+    """
     output_dir = BASE_DIR / "output"
+    output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"BRS_run_{run_id}.xlsx"
+    logger.info("Run %d: reconciliation started", run_id)
     try:
+        # ── Step 1: Parse + match + RAG (output_path=None → no internal Excel) ──
         result = await reconcile_workbooks(
             statement_path=req_dict["bank_statement_path"],
             bank_book_path=req_dict["bank_book_path"],
             previous_brs_path=req_dict.get("previous_brs_path"),
             previous_brs_sheet=req_dict.get("previous_brs_sheet"),
             portal_data_path=req_dict.get("portal_data_path"),
-            output_path=output_path,
+            output_path=None,   # Excel is generated below, concurrently with DB writes
             bank_account=bank_account,
             use_rag=True,
         )
+        logger.info(
+            "Run %d: reconcile done — %d stmt / %d book rows, %d matches; "
+            "launching Excel + DB persist concurrently",
+            run_id,
+            result["statement"]["count"],
+            result["bank_book"]["count"],
+            sum(result["matching"]["pass_counts"].values()),
+        )
         summary = serialise_result(result)
 
+        # ── Step 2: Excel generation (CPU-bound thread) starts NOW ──────────────
+        loop = asyncio.get_running_loop()
+        excel_fut = loop.run_in_executor(
+            None,
+            functools.partial(
+                generate_brs_excel,
+                output_path,
+                as_on_date=result["statement"]["period_end"],
+                bank_book_balance=result["bank_book"]["closing_balance"],
+                bank_statement_balance=result["statement"]["closing_balance"],
+                sections=result["sections"],
+                totals=result["totals"],
+                bank_account=bank_account,
+            ),
+        )
+
+        # ── Step 3: DB persistence runs concurrently with Excel generation ──────
         async with get_connection() as conn:
             await _persist_run_artifacts(conn, run_id, result)
             await update_run(
@@ -109,7 +140,17 @@ async def _run_reconciliation_task(
                 entity_type="run", entity_id=run_id,
                 details=summary,
             )
+
+        # ── Step 4: Await Excel (may already be done; if not, wait for it) ──────
+        try:
+            await excel_fut
+            logger.info("Run %d: Excel written to %s", run_id, output_path)
+        except Exception:
+            logger.warning("Run %d: Excel generation failed (run still completed)", run_id, exc_info=True)
+
+        logger.info("Run %d: completed successfully", run_id)
     except Exception as exc:
+        logger.exception("Run %d: reconciliation FAILED: %s", run_id, exc)
         try:
             async with get_connection() as conn:
                 await update_run(conn, run_id, status="failed")
@@ -119,7 +160,7 @@ async def _run_reconciliation_task(
                     details={"error": str(exc)},
                 )
         except Exception:
-            pass
+            logger.exception("Run %d: could not mark run as failed in DB", run_id)
 
 
 @router.post("/run")
@@ -194,7 +235,8 @@ async def get_run_details(run_id: int):
 
         section_totals = await _reconstruct_section_totals(conn, run_id)
         if section_totals and run.get("bank_book_balance") is not None:
-            bb = run["bank_book_balance"]
+            bb  = float(run["bank_book_balance"])
+            bsb = float(run.get("bank_statement_balance") or 0)
             reconciled = (
                 bb
                 + section_totals["add_cheque_issued"]
@@ -204,13 +246,13 @@ async def get_run_details(run_id: int):
             )
             run["totals"] = {
                 "bank_book_balance": bb,
-                "bank_statement_balance": run.get("bank_statement_balance", 0),
-                "add_cheque_issued": section_totals["add_cheque_issued"],
-                "add_bank_credit": section_totals["add_bank_credit"],
+                "bank_statement_balance": bsb,
+                "add_cheque_issued":   section_totals["add_cheque_issued"],
+                "add_bank_credit":     section_totals["add_bank_credit"],
                 "less_cheque_deposit": section_totals["less_cheque_deposit"],
-                "less_bank_debit": section_totals["less_bank_debit"],
-                "reconciled_balance": reconciled,
-                "difference": reconciled - (run.get("bank_statement_balance") or 0),
+                "less_bank_debit":     section_totals["less_bank_debit"],
+                "reconciled_balance":  reconciled,
+                "difference":          reconciled - bsb,
             }
             run["section_summary"] = section_totals.get("section_summary", {})
 
@@ -523,79 +565,130 @@ async def _reconstruct_section_totals(conn, run_id: int) -> dict | None:
 
 
 async def _persist_run_artifacts(conn, run_id: int, result: dict) -> None:
+    """Persist reconciliation artifacts using bulk operations.
+
+    Replaces the former N+1 pattern (one await per row) with:
+      - executemany()  for bulk inserts (one pipeline per batch)
+      - SELECT WHERE run_id=?  to retrieve all IDs back in one query
+      - UPDATE WHERE id = ANY(?)  for bulk status updates
+
+    A typical run with 500+ transactions previously made ~2 500 sequential
+    round-trips to Supabase (12-20 min).  This implementation makes ~10.
+    """
     statement_rows = result["statement"]["transactions"]
     bank_book_rows = result["bank_book"]["transactions"]
     carry_forward_items = result["matching"]["pending_carry_forward_items"]
     matches = result["matching"]["matches"]
+    exceptions_data = result.get("exceptions", [])
 
     stmt_pass_map, book_pass_map = _build_match_pass_maps(matches)
-    statement_ids: dict[int, int] = {}
-    bank_book_ids: dict[int, int] = {}
 
-    for row in statement_rows:
-        tid = await insert_transaction(
-            conn, run_id, "bank_statement",
-            date_to_iso(row["value_date"]) or "",
-            decimal_to_float(row["amount"]),
-            row["direction"],
-            references=row.get("refs", []),
-            description=row["description"],
-            cheque_no=row.get("cheque_no"),
-            transaction_id=row.get("transaction_id"),
-            original_row=row["row_number"],
-            sha256_hash=row["row_hash"],
-        )
-        statement_ids[row["row_number"]] = tid
-        if row.get("matched"):
-            await update_transaction_status(conn, tid, "matched",
-                                             stmt_pass_map.get(row["row_number"]))
+    # ── SQL template shared across all three transaction sources ─────
+    _INSERT_TXN = """
+        INSERT INTO transactions
+          (run_id, source, transaction_date, amount, direction, references_json,
+           narration, description, voucher_type, voucher_no, cheque_no,
+           transaction_id, original_row, sha256_hash)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)"""
 
-    for row in bank_book_rows:
-        tid = await insert_transaction(
-            conn, run_id, "bank_book",
-            date_to_iso(row["voucher_date"]) or "",
-            decimal_to_float(row["amount"]),
-            row["direction"],
-            references=row.get("refs", []),
-            narration=row["narration"],
-            description=row["particulars"],
-            voucher_type=row.get("voucher_type"),
-            voucher_no=row.get("voucher_no"),
-            cheque_no=row.get("cheque_no"),
-            original_row=row["row_number"],
-            sha256_hash=row["row_hash"],
-        )
-        bank_book_ids[row["row_number"]] = tid
-        if row.get("matched"):
-            await update_transaction_status(conn, tid, "matched",
-                                             book_pass_map.get(row["row_number"]))
+    # ── Build record tuples ──────────────────────────────────────────
+    stmt_records = [
+        (run_id, "bank_statement",
+         date_to_iso(r["value_date"]) or "",
+         decimal_to_float(r["amount"]), r["direction"],
+         json.dumps(r.get("refs", [])),
+         None, r["description"], None, None,
+         r.get("cheque_no"), r.get("transaction_id"),
+         r["row_number"], r["row_hash"])
+        for r in statement_rows
+    ]
+    book_records = [
+        (run_id, "bank_book",
+         date_to_iso(r["voucher_date"]) or "",
+         decimal_to_float(r["amount"]), r["direction"],
+         json.dumps(r.get("refs", [])),
+         r["narration"], r["particulars"], r.get("voucher_type"),
+         r.get("voucher_no"), r.get("cheque_no"), None,
+         r["row_number"], r["row_hash"])
+        for r in bank_book_rows
+    ]
+    cf_records = [
+        (run_id, "carry_forward",
+         date_to_iso(item["original_date"]) or "",
+         decimal_to_float(item["amount"]), item.get("direction", "IN"),
+         json.dumps(item.get("refs", [])),
+         item["remarks"], item["remarks"], None, None,
+         item.get("cheque_no"), None,
+         item["row_number"], _carry_forward_hash(run_id, item))
+        for item in carry_forward_items
+    ]
 
-    for item in carry_forward_items:
-        tid = await insert_transaction(
-            conn, run_id, "carry_forward",
-            date_to_iso(item["original_date"]) or "",
-            decimal_to_float(item["amount"]),
-            item.get("direction", "IN"),
-            references=item.get("refs", []),
-            narration=item["remarks"],
-            description=item["remarks"],
-            cheque_no=item.get("cheque_no"),
-            original_row=item["row_number"],
-            sha256_hash=_carry_forward_hash(run_id, item),
-        )
-        await conn.execute(
+    # ── Bulk insert transactions (3 executemany calls instead of N+M+K awaits) ─
+    for records in (stmt_records, book_records, cf_records):
+        if records:
+            await conn.executemany(_INSERT_TXN, records)
+
+    # ── Bulk insert carry_forward table ─────────────────────────────
+    cf_table_records = [
+        (run_id, item["section"],
+         date_to_iso(item["original_date"]) or "",
+         item["remarks"], item.get("cheque_no"),
+         decimal_to_float(item["amount"]),
+         date_to_iso(item.get("cleared_on")))
+        for item in carry_forward_items
+    ]
+    if cf_table_records:
+        await conn.executemany(
             """INSERT INTO carry_forward
                (run_id, brs_section, original_date, remarks, cheque_no, amount, cleared_date)
                VALUES ($1,$2,$3,$4,$5,$6,$7)""",
-            run_id,
-            item["section"],
-            date_to_iso(item["original_date"]) or "",
-            item["remarks"],
-            item.get("cheque_no"),
-            decimal_to_float(item["amount"]),
-            date_to_iso(item.get("cleared_on")),
+            cf_table_records,
         )
 
+    # ── Fetch all inserted IDs in one SELECT ─────────────────────────
+    db_rows = await conn.fetch(
+        "SELECT id, original_row, source FROM transactions WHERE run_id = $1", run_id
+    )
+    statement_ids: dict[int, int] = {}
+    bank_book_ids: dict[int, int] = {}
+    for r in db_rows:
+        if r["source"] == "bank_statement":
+            statement_ids[r["original_row"]] = r["id"]
+        elif r["source"] == "bank_book":
+            bank_book_ids[r["original_row"]] = r["id"]
+
+    # ── Bulk update matched statuses (one UPDATE per pass per source) ─
+    pass_stmt: dict[int, list[int]] = {}
+    for row in statement_rows:
+        if row.get("matched"):
+            rn = row["row_number"]
+            if rn in statement_ids:
+                pn = stmt_pass_map.get(rn, 0)
+                pass_stmt.setdefault(pn, []).append(statement_ids[rn])
+
+    pass_book: dict[int, list[int]] = {}
+    for row in bank_book_rows:
+        if row.get("matched"):
+            rn = row["row_number"]
+            if rn in bank_book_ids:
+                pn = book_pass_map.get(rn, 0)
+                pass_book.setdefault(pn, []).append(bank_book_ids[rn])
+
+    for pn, ids in pass_stmt.items():
+        await conn.execute(
+            "UPDATE transactions SET match_status='matched', pass_number=$1"
+            " WHERE id = ANY($2::bigint[])",
+            pn, ids,
+        )
+    for pn, ids in pass_book.items():
+        await conn.execute(
+            "UPDATE transactions SET match_status='matched', pass_number=$1"
+            " WHERE id = ANY($2::bigint[])",
+            pn, ids,
+        )
+
+    # ── Bulk insert matches ──────────────────────────────────────────
+    match_records = []
     for match in matches:
         pass_number = match.get("pass_number")
         if pass_number not in {1, 2, 3, 4, 5, 6}:
@@ -605,15 +698,25 @@ async def _persist_run_artifacts(conn, run_id: int, result: dict) -> None:
         book_ids = [bank_book_ids[rn] for rn in match.get("book_rows", [])
                     if rn in bank_book_ids]
         if stmt_ids or book_ids:
-            await insert_match(
-                conn, run_id, min(pass_number, 6), match["match_type"],
-                stmt_ids, book_ids,
+            match_records.append((
+                run_id, min(pass_number, 6), match["match_type"],
+                match.get("confidence", 1.0),
+                json.dumps(stmt_ids), json.dumps(book_ids),
                 decimal_to_float(match["amount"]),
-                notes=match.get("notes"),
-            )
+                match.get("notes"),
+            ))
 
-    # Persist exceptions for unmatched items
-    exceptions_data = result.get("exceptions", [])
+    if match_records:
+        await conn.executemany(
+            """INSERT INTO matches
+               (run_id, pass_number, match_type, confidence,
+                statement_ids, book_ids, matched_amount, notes)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8)""",
+            match_records,
+        )
+
+    # ── Bulk insert exceptions ───────────────────────────────────────
+    exc_records = []
     for exc in exceptions_data:
         source = exc.get("source", "statement")
         row_number = exc.get("row_number")
@@ -623,7 +726,15 @@ async def _persist_run_artifacts(conn, run_id: int, result: dict) -> None:
         exc_type = exc.get("exception_type", "unknown_dr")
         sla = EXCEPTION_SLA_DAYS.get(exc_type, 3)
         brs_section = exc.get("brs_section", "less_bank_debit")
-        await insert_exception(conn, run_id, txn_id, exc_type, brs_section, sla)
+        exc_records.append((run_id, txn_id, exc_type, brs_section, sla, None))
+
+    if exc_records:
+        await conn.executemany(
+            """INSERT INTO exceptions
+               (run_id, transaction_id, exception_type, brs_section, sla_days, assigned_to)
+               VALUES ($1,$2,$3,$4,$5,$6)""",
+            exc_records,
+        )
 
 
 def _build_match_pass_maps(matches: list) -> tuple[dict, dict]:

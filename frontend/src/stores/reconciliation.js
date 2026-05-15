@@ -27,6 +27,9 @@ export const useReconciliationStore = defineStore('reconciliation', () => {
     return data
   }
 
+  // Used to cancel an in-progress poll loop from outside startRun()
+  let _cancelPolling = null
+
   async function startRun(payload) {
     loading.value = true
     error.value = null
@@ -35,35 +38,40 @@ export const useReconciliationStore = defineStore('reconciliation', () => {
       const { data: started } = await api.post('/reconciliation/run', payload)
       const runId = started.run_id
 
-      // Poll GET /run/{id} every 3 s until completed or failed
-      await new Promise((resolve, reject) => {
+      // Poll GET /run/{id} every 3 s until completed, failed, or cancelled.
+      // No hard timeout — the user can cancel via cancelPolling().
+      const result = await new Promise((resolve, reject) => {
         const INTERVAL = 3000
-        const MAX_WAIT = 20 * 60 * 1000 // 20 minutes hard cap
-        const startedAt = Date.now()
         const timer = setInterval(async () => {
           try {
-            if (Date.now() - startedAt > MAX_WAIT) {
-              clearInterval(timer)
-              reject(new Error('Reconciliation timed out after 20 minutes'))
-              return
-            }
             const { data: run } = await api.get(`/reconciliation/run/${runId}`)
             if (run.status === 'completed') {
               clearInterval(timer)
+              _cancelPolling = null
               currentRun.value = run
               resolve(run)
             } else if (run.status === 'failed') {
               clearInterval(timer)
+              _cancelPolling = null
               reject(new Error(`Run #${runId} failed. Check audit logs for details.`))
             }
             // still "running" — keep polling
           } catch (pollErr) {
             clearInterval(timer)
+            _cancelPolling = null
             reject(pollErr)
           }
         }, INTERVAL)
+
+        // Expose cancellation: caller sets _cancelPolling, we wire it here
+        _cancelPolling = () => {
+          clearInterval(timer)
+          _cancelPolling = null
+          resolve(null) // null signals a user cancel (not an error)
+        }
       })
 
+      if (result === null) return null  // cancelled by user
       await fetchRuns()
       return currentRun.value
     } catch (e) {
@@ -71,6 +79,12 @@ export const useReconciliationStore = defineStore('reconciliation', () => {
       throw e
     } finally {
       loading.value = false
+    }
+  }
+
+  function cancelPolling() {
+    if (_cancelPolling) {
+      _cancelPolling()
     }
   }
 
@@ -109,5 +123,5 @@ export const useReconciliationStore = defineStore('reconciliation', () => {
     runs.value = runs.value.filter(r => r.id !== runId)
   }
 
-  return { runs, currentRun, loading, error, fetchRuns, fetchRun, startRun, downloadBRS, downloadMatches, deleteRun }
+  return { runs, currentRun, loading, error, fetchRuns, fetchRun, startRun, cancelPolling, downloadBRS, downloadMatches, deleteRun }
 })

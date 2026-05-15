@@ -35,16 +35,24 @@ def iter_amount_matching_subsets(
     min_size: int = 2,
     max_size: int = 6,
 ) -> Iterable[list[dict[str, Any]]]:
-    """Yield candidate subsets whose summed amount matches the target exactly."""
+    """Yield the FIRST candidate subset whose summed amount matches the target exactly.
 
-    # Fast-path: if ALL items sum to the target, yield the full set immediately
-    # regardless of max_size.  Common for ref-grouped one-to-many matches.
+    Phase 6 guards:
+    - Hard cap: candidate set is trimmed to 20 rows before any search begins.
+      This prevents exponential blowup when many book rows have close amounts.
+    - Early exit: search stops on the first valid combination found.  The first
+      match is sufficient for reconciliation purposes.
+    """
+    # Phase 6: hard cap — trim to 20 rows before exponential search begins.
+    if len(items) > 20:
+        items = items[:20]
+
+    # Fast-path: if ALL items sum to the target, yield the full set immediately.
     if len(items) >= min_size and amounts_equal(sum_amounts(items), target):
         yield list(items)
         return
 
-    # Near-full-set: for large sets, try removing 1-2 items instead of
-    # combinatorial search (O(n²) vs O(2^n)).
+    # Near-full-set: for large sets try removing 1–2 items instead of O(2^n) search.
     if len(items) > max_size and len(items) >= min_size + 1:
         total = sum_amounts(items)
         excess = total - target
@@ -60,13 +68,11 @@ def iter_amount_matching_subsets(
                         return
 
     upper = min(max_size, len(items))
-    if len(items) > 15:
-        # Too many items for brute-force; near-full-set above was the last shot.
-        return
     for size in range(min_size, upper + 1):
         for combo in combinations(items, size):
             if amounts_equal(sum_amounts(combo), target):
                 yield list(combo)
+                return  # Phase 6: exit on first valid combination found
 
 
 def mark_match(

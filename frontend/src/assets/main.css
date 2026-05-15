@@ -108,6 +108,9 @@ main.with-header { padding-top: calc(var(--header-h) + 1.75rem); }
 .btn-secondary:hover:not(:disabled) { @apply bg-slate-200; }
 .btn-danger { @apply bg-red-600 text-white; }
 .btn-danger:hover:not(:disabled) { @apply bg-red-700; }
+.btn-outline-danger { @apply border border-red-400 text-red-600 bg-transparent; }
+.btn-outline-danger:hover:not(:disabled) { @apply bg-red-50; }
+.btn-row { @apply flex gap-3 items-center flex-wrap; }
 .btn-sm { @apply text-xs; padding: .35rem .75rem; }
 .btn-xs { @apply text-xs rounded; padding: .2rem .55rem; }
 .btn-full { @apply w-full justify-center; }

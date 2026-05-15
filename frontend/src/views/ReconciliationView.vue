@@ -20,9 +20,19 @@
         <FileUploader label="Previous BRS (optional)" upload-type="previous-brs" optional @uploaded="p => form.previous_brs_path = p" />
 
         <p v-if="error" class="error-msg">{{ error }}</p>
-        <button type="submit" :disabled="!canRun || store.loading" class="btn btn-primary">
-          {{ store.loading ? `Running… (${elapsed}s)` : 'Start Reconciliation' }}
-        </button>
+        <div class="btn-row">
+          <button type="submit" :disabled="!canRun || store.loading" class="btn btn-primary">
+            {{ store.loading ? `Running… (${elapsed}s)` : 'Start Reconciliation' }}
+          </button>
+          <button
+            v-if="store.loading"
+            type="button"
+            class="btn btn-outline-danger"
+            @click="cancel"
+          >
+            Cancel
+          </button>
+        </div>
       </form>
     </div>
 
@@ -79,12 +89,24 @@ async function run() {
   elapsed.value = 0
   elapsedTimer = setInterval(() => elapsed.value++, 1000)
   try {
-    result.value = await store.startRun(form.value)
+    const run = await store.startRun(form.value)
+    if (run === null) {
+      error.value = 'Run cancelled.'
+    } else {
+      result.value = run
+    }
   } catch (e) {
     error.value = e.response?.data?.detail || e.message
   } finally {
     clearInterval(elapsedTimer)
     elapsedTimer = null
   }
+}
+
+function cancel() {
+  store.cancelPolling()
+  clearInterval(elapsedTimer)
+  elapsedTimer = null
+  error.value = 'Run cancelled — the reconciliation continues in the background.'
 }
 </script>

@@ -10,16 +10,20 @@ from __future__ import annotations
 import asyncio
 import functools
 import json
+import logging
+import time
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 import httpx
 
+logger = logging.getLogger(__name__)
+
 import config
 from engine.brs_output import generate_brs_excel
 from engine.classifier import build_brs_sections, build_exception_items, calculate_brs_totals
-from engine.matching.orchestrator import run_matching_engine
+from engine.matching.orchestrator import run_matching_engine_async
 from engine.normaliser import date_to_iso, decimal_to_float
 from engine.parsers.bank_book import parse_bank_book
 from engine.parsers.bank_statement import parse_bank_statement
@@ -103,26 +107,52 @@ async def reconcile_workbooks(
     use_rag: bool = True,
 ) -> dict[str, Any]:
     """Async wrapper — runs CPU-bound parsing + matching in thread pool."""
+    t0 = time.perf_counter()
+    stmt_name = Path(statement_path).name
+    book_name = Path(bank_book_path).name
+    logger.info(
+        "reconcile_workbooks: start  [stmt=%s  book=%s  prev_brs=%s  portal=%s]",
+        stmt_name, book_name,
+        Path(previous_brs_path).name if previous_brs_path else "–",
+        Path(portal_data_path).name if portal_data_path else "–",
+    )
 
     loop = asyncio.get_running_loop()
 
     # ── Parallel parsing (CPU-bound in executor) ────────────────────
+    logger.info("Parsing bank statement + bank book in parallel …")
+    t_parse = time.perf_counter()
     statement_result, bank_book_result = await asyncio.gather(
         loop.run_in_executor(None, parse_bank_statement, statement_path),
         loop.run_in_executor(None, parse_bank_book, bank_book_path),
     )
+    logger.info(
+        "Parsing done in %.2fs — statement: %d rows (period %s → %s)  "
+        "bank-book: %d rows",
+        time.perf_counter() - t_parse,
+        statement_result["count"],
+        statement_result.get("period_start"),
+        statement_result.get("period_end"),
+        bank_book_result["count"],
+    )
 
     if previous_brs_path:
+        logger.info("Parsing previous BRS …")
+        t_prev = time.perf_counter()
         previous_brs_result = await loop.run_in_executor(
             None, parse_previous_brs, previous_brs_path, previous_brs_sheet
+        )
+        logger.info(
+            "Previous BRS parsed in %.2fs — %d carry-forward items (%d pending / %d resolved)",
+            time.perf_counter() - t_prev,
+            len(previous_brs_result.get("items", [])),
+            len(previous_brs_result.get("pending_items", [])),
+            len(previous_brs_result.get("resolved_items", [])),
         )
     else:
         previous_brs_result = {"items": [], "pending_items": [], "resolved_items": []}
 
     # ── Opening balance cross-validation ────────────────────────────
-    # The bank-book opening balance for the current period must equal the
-    # reconciled balance from the previous BRS.  A mismatch indicates either
-    # a data-entry error in the ERP or that the previous BRS was not finalised.
     balance_warnings: list[str] = []
     if previous_brs_path:
         prev_reconciled = previous_brs_result.get("reconciled_balance")
@@ -131,24 +161,56 @@ async def reconcile_workbooks(
             from decimal import Decimal
             diff = book_opening - prev_reconciled
             if abs(diff) > Decimal("0.01"):
-                balance_warnings.append(
+                msg = (
                     f"Opening balance mismatch: Bank Book opening balance is "
                     f"{book_opening:,.2f} but previous BRS reconciled balance was "
                     f"{prev_reconciled:,.2f} (difference: {diff:+,.2f}). "
                     f"Verify that the previous month's BRS was finalised correctly."
                 )
+                balance_warnings.append(msg)
+                logger.warning("Balance check: %s", msg)
+        else:
+            logger.info(
+                "Opening balance check: prev_reconciled=%s  book_opening=%s",
+                prev_reconciled, book_opening,
+            )
 
     # ── Deterministic 5-pass matching ───────────────────────────────
-    match_result: dict = await loop.run_in_executor(
-        None,
-        run_matching_engine,
+    logger.info(
+        "Starting 5-pass matching engine: %d statement rows / %d bank-book rows …",
+        len(statement_result["transactions"]),
+        len(bank_book_result["transactions"]),
+    )
+    t_match = time.perf_counter()
+    match_result: dict = await run_matching_engine_async(
         statement_result["transactions"],
         bank_book_result["transactions"],
         previous_brs_result["items"],
     )
+    det_matches = sum(v for k, v in match_result["pass_counts"].items() if k != 6)
+    logger.info(
+        "Deterministic passes done in %.2fs — %d matched  |  %d stmt unmatched  |  "
+        "%d book unmatched  (P1=%d P2=%d P3=%d P4=%d P5=%d)",
+        time.perf_counter() - t_match,
+        det_matches,
+        len(match_result["unmatched_statement"]),
+        len(match_result["unmatched_book"]),
+        match_result["pass_counts"].get(1, 0),
+        match_result["pass_counts"].get(2, 0),
+        match_result["pass_counts"].get(3, 0),
+        match_result["pass_counts"].get(4, 0),
+        match_result["pass_counts"].get(5, 0),
+    )
 
     # ── Optional Hybrid RAG for residuals ───────────────────────────
-    if match_result["unmatched_statement"] or match_result["unmatched_book"]:
+    if use_rag and (match_result["unmatched_statement"] or match_result["unmatched_book"]):
+        n_stmt_unmatched = len(match_result["unmatched_statement"])
+        n_book_unmatched = len(match_result["unmatched_book"])
+        logger.info(
+            "Pass 6 RAG: sending %d stmt + %d book unmatched rows to ML service …",
+            n_stmt_unmatched, n_book_unmatched,
+        )
+        t_rag = time.perf_counter()
         stmt_rows = [_serialise_row_for_ml(r) for r in match_result["unmatched_statement"]]
         book_rows = [_serialise_row_for_ml(r) for r in match_result["unmatched_book"]]
         try:
@@ -159,20 +221,47 @@ async def reconcile_workbooks(
                 )
             if resp.status_code == 200:
                 _apply_rag_results(resp.json(), match_result)
-        except (httpx.ConnectError, httpx.TimeoutException):
-            # ML service unavailable — continue with deterministic results only
-            pass
+                rag_matches = match_result["pass_counts"].get(6, 0)
+                logger.info(
+                    "Pass 6 RAG done in %.2fs — %d additional matches; "
+                    "%d stmt / %d book still unmatched",
+                    time.perf_counter() - t_rag,
+                    rag_matches,
+                    len(match_result["unmatched_statement"]),
+                    len(match_result["unmatched_book"]),
+                )
+            else:
+                logger.warning(
+                    "ML service returned HTTP %d for /rag/match — skipping Pass 6",
+                    resp.status_code,
+                )
+        except httpx.ConnectError:
+            logger.warning("ML service unreachable — Pass 6 skipped (deterministic results only)")
+        except httpx.TimeoutException:
+            logger.warning("ML service timed out after 300s — Pass 6 skipped")
+        except Exception:
+            logger.exception("Unexpected error during Pass 6 RAG — skipping")
+    elif not use_rag:
+        logger.info("Pass 6 RAG skipped (use_rag=False)")
+    else:
+        logger.info("Pass 6 RAG skipped — no unmatched residuals")
 
     # ── HDFC portal data enrichment ──────────────────────────────────
-    # Parse the portal report (if supplied) and annotate portal settlement
-    # match groups with individual student payment details.
     portal_result: dict = {"payments": [], "by_settlement_date": {}, "count": 0}
     if portal_data_path:
+        logger.info("Parsing HDFC portal data …")
+        t_portal = time.perf_counter()
         portal_result = await loop.run_in_executor(
             None, parse_hdfc_portal, portal_data_path
         )
         if portal_result.get("count", 0) > 0:
             enrich_portal_matches(match_result, portal_result)
+            logger.info(
+                "Portal data enriched in %.2fs — %d payments",
+                time.perf_counter() - t_portal, portal_result["count"],
+            )
+        else:
+            logger.info("Portal file parsed but contained no payment rows")
 
     # ── BRS sections & totals ────────────────────────────────────────
     sections = build_brs_sections(
@@ -192,9 +281,21 @@ async def reconcile_workbooks(
         match_result["pending_carry_forward_items"],
     )
 
+    section_counts = {k: len(v) for k, v in sections.items() if v}
+    logger.info(
+        "BRS sections: %s  |  book=%.2f  stmt=%.2f  diff=%.2f  exceptions=%d",
+        section_counts,
+        float(totals.get("bank_book_balance", 0)),
+        float(totals.get("bank_statement_balance", 0)),
+        float(totals.get("difference", 0)),
+        len(exceptions),
+    )
+
     # ── Excel output (CPU-bound in executor) ─────────────────────────
     output_file = None
     if output_path:
+        logger.info("Generating BRS Excel output …")
+        t_excel = time.perf_counter()
         output_file = await loop.run_in_executor(
             None,
             functools.partial(
@@ -208,6 +309,18 @@ async def reconcile_workbooks(
                 bank_account=bank_account,
             ),
         )
+        logger.info("Excel written to %s in %.2fs", output_file, time.perf_counter() - t_excel)
+
+    logger.info(
+        "reconcile_workbooks: complete in %.2fs total  "
+        "(%d stmt / %d book  →  %d matched  %d unmatched  %d exceptions)",
+        time.perf_counter() - t0,
+        statement_result["count"],
+        bank_book_result["count"],
+        sum(match_result["pass_counts"].values()),
+        len(match_result["unmatched_statement"]) + len(match_result["unmatched_book"]),
+        len(exceptions),
+    )
 
     return {
         "statement": statement_result,
